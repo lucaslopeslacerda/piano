@@ -178,6 +178,10 @@ kbd{font-family:inherit;font-size:11.5px;border:1px solid #8a8174;border-bottom-
 #fall{display:none;width:100%;height:var(--fallH);border-radius:8px 8px 0 0;background:#191613}
 .dock.with-fall #fall{display:block}
 .dock.free #fall{height:calc(var(--fallH)*.62)}
+#sheet{display:none;width:100%;height:182px;background:#fffdf8;border-radius:8px;margin-bottom:6px}
+.dock.with-sheet #sheet{display:block}
+.dock.with-sheet:not(.nofall) #fall{height:calc(var(--fallH)*.55)}
+.dock.nofall #fall{display:none!important}
 .piano{position:relative;height:170px;user-select:none;-webkit-user-select:none;touch-action:none}
 .key{position:absolute;top:0;border-radius:0 0 7px 7px;cursor:pointer;display:flex;flex-direction:column;justify-content:flex-end;align-items:center}
 .key.white{height:100%;background:linear-gradient(#fffefb,#efe9dd);border:1px solid #24201c;z-index:1}
@@ -246,6 +250,7 @@ body.midi-on #pianoHint{display:inline}
     <span id="pianoHint">🎹 A receber notas do piano</span><div class="chordhud" id="chordHud"></div>
     <div class="r"><span id="kbHint">Teclas <kbd>A</kbd><kbd>W</kbd><kbd>S</kbd>…<kbd>K</kbd> · oitava <kbd>Z</kbd><kbd>X</kbd> (<b id="kbOct">Dó4</b>) · pedal <kbd>Espaço</kbd></span></div>
   </div>
+  <canvas id="sheet"></canvas>
   <div class="pscroll" id="pscroll"><div class="pinner" id="pinner"><canvas id="fall"></canvas><div class="piano" id="piano"></div></div></div>
 </div>
 <div class="toasts" id="toasts"></div>
@@ -1259,6 +1264,7 @@ function fallLoop(ts) {
   for (let m = LOW; m <= HIGH; m++) if (pcOf(m) === 0 && KL[m]) { const x = Math.round(KL[m].x * W) + .5; g.beginPath(); g.moveTo(x, 0); g.lineTo(x, H); g.stroke(); }
   if (Fall.draw) Fall.draw(g, W, H);
   else if (Fall.mode === 'free') drawFree(g, W, H);
+  if (Sheet.on && Fall.drawSheet) Fall.drawSheet();
   Fall.raf = requestAnimationFrame(fallLoop);
 }
 function rrect(g, x, y, w, h, r) { r = Math.min(r, w / 2, h / 2); g.beginPath(); g.moveTo(x + r, y); g.arcTo(x + w, y, x + w, y + h, r); g.arcTo(x + w, y + h, x, y + h, r); g.arcTo(x, y + h, x, y, r); g.arcTo(x, y, x + w, y, r); g.closePath(); }
@@ -1589,7 +1595,7 @@ const SONG_DEFS = [
   const LA = 'R:3 A2:.5 E3:.5 A3:.5 R:1.5 E2:.5 E3:.5 G#3:.5 R:1.5 A2:.5 E3:.5 A3:.5 R:1.5 R:3 A2:.5 E3:.5 A3:.5 R:1.5 E2:.5 E3:.5 G#3:.5 R:1.5 ';
   const LE = 'A2:.5 E3:.5 A3:.5 R:1.5 ';
   const LB = 'C3:.5 G3:.5 C4:.5 R:1.5 G2:.5 G3:.5 B3:.5 R:1.5 A2:.5 E3:.5 A3:.5 R:1.5 E2:.5 E3:.5 E4:.5 R:1.5 R:3 R:3 ';
-  SONG_DEFS.push({ id: 'elisa', t: 'Para Elisa (A–A–B–A)', by: 'L. van Beethoven', lvl: 3, bpm: 150, bpb: 3,
+  SONG_DEFS.push({ id: 'elisa', t: 'Para Elisa (A–A–B–A)', by: 'L. van Beethoven', lvl: 3, bpm: 150, bpb: 3, den: 8,
     r: AH + AB + E1 + AB + E2 + BB + AB + 'A4:3', l: 'R:1 ' + LA + LE + LA + LE + LB + LA + 'A2:.5 E3:.5 A3:1.5 R:.5' });
   SONG_DEFS.push({ id: 'eua', t: 'Hino dos EUA (The Star-Spangled Banner)', by: 'J. S. Smith', lvl: 2, bpm: 90, bpb: 3,
     r: 'G4:.75 E4:.25 C4 E4 G4 C5:2 E5:.75 D5:.25 C5 E4 F#4 G4:2 G4:.5 G4:.5 E5:1.5 D5:.5 C5 B4:2 A4:.75 B4:.25 C5 C5 G4 E4 C4 G4:.75 E4:.25 '
@@ -1605,12 +1611,12 @@ function buildSong(def) {
     str.trim().split(/\s+/).forEach(tok => {
       if (tok === '|') return;
       const [n, dS] = tok.split(':'); const d = dS ? parseFloat(dS) : 1;
-      if (n !== 'R') n.split('+').forEach(x => notes.push({ m: nm(x), t: t * beat, d: d * beat * 0.92, h, v: h === 'L' ? 0.6 : 0.75 }));
+      if (n !== 'R') n.split('+').forEach(x => notes.push({ m: nm(x), t: t * beat, d: d * beat * 0.92, h, v: h === 'L' ? 0.6 : 0.75, q: d * (def.den === 8 ? .5 : 1) }));
       t += d;
     });
   }
   notes.sort((a, b) => a.t - b.t || a.m - b.m);
-  return { id: def.id, title: def.t, by: def.by, lvl: def.lvl, notes, dur: Math.max(...notes.map(n => n.t + n.d)), beat, bpb: def.bpb || 4 };
+  return { id: def.id, title: def.t, by: def.by, lvl: def.lvl, notes, dur: Math.max(...notes.map(n => n.t + n.d)), beat, bpb: def.bpb || 4, den: def.den || 4, qsec: def.den === 8 ? beat * 2 : beat };
 }
 const SONGS = SONG_DEFS.map(buildSong);
 function importedSongs() { return S.imported.map(s => ({ id: s.id, title: s.title, by: s.by || 'Importada', lvl: 0, notes: s.n.map(([m, t, d, h]) => ({ m, t, d, h: h ? 'L' : 'R', v: 0.7 })), dur: s.dur, beat: s.beat || null, bpb: 4, imported: true })); }
@@ -1820,6 +1826,9 @@ function songPlayer(el, song) {
     <label class="tg"><input type="checkbox" data-a="metro"> Metrónomo</label>
     <label class="tg"><input type="checkbox" data-a="names" ${S.settings.fallNames ? 'checked' : ''}> Nomes nas notas</label>
   </div>
+  <div class="ctrls"><div class="grp">Ver <div class="seg" data-g="view"><button data-v="fall">Notas a cair</button><button data-v="sheet">Partitura</button><button data-v="both">Ambas</button></div></div>
+    <label class="tg"><input type="checkbox" data-a="snames" ${S.settings.sheetNames ? 'checked' : ''}> Nomes na partitura</label>
+    <a href="#partitura" class="note" style="margin:0">❓ Como ler a partitura</a></div>
   <div class="prog" data-a="seek"><i></i><div class="loop" style="display:none"></div></div>
   <div class="scorebar"><span>Certas <b data-r="hits">0</b></span><span>Erradas <b data-r="errs">0</b></span><span>Falhadas <b data-r="miss">0</b></span><span data-r="status" class="note" style="margin:0"></span></div>
   <p class="note"><b>Ouvir</b> = a app toca a música inteira (pelo teu piano, se estiver ligado por cabo; senão pelo altifalante). <b>Esperar</b> = a música só avança quando tocas as teclas certas. <b>Ritmo</b> = a música não para e és pontuado pelo tempo. Sem som no iPad? Sobe o volume e confirma que o piano está ligado. Atalhos: <kbd>Espaço</kbd> tocar/pausa. Azul = mão direita, laranja = mão esquerda. No modo Esperar a música só avança quando tocas as teclas marcadas. Usa um teclado MIDI ou o microfone (em Definições) para tocares num piano real.</p>`;
@@ -1918,8 +1927,17 @@ function songPlayer(el, song) {
   $('[data-a=B]', el).onclick = () => { if (P.A == null || P.t <= P.A + 0.3) { toast('Marca primeiro o início (A) e avança um pouco.'); return; } P.B = P.t; showLoop(); resetFrom(Math.max(-1, P.A - 1)); toast('Ciclo ativo: o trecho repete-se.'); };
   $('[data-a=noloop]', el).onclick = () => { P.A = P.B = null; showLoop(); };
   $('[data-a=seek]', el).onclick = e => { const r = e.currentTarget.getBoundingClientRect(); resetFrom(clamp((e.clientX - r.left) / r.width, 0, 1) * song.dur - 1); };
+  // vista: notas a cair / partitura / ambas
+  const sd = prepareSheet(song, notes);
+  function applyView() {
+    const v = S.settings.view || 'fall'; segSet('view', v);
+    $('#dock').classList.toggle('nofall', v === 'sheet'); showSheet(v !== 'fall');
+  }
+  $('[data-g=view]', el).onclick = e => { const b = e.target.closest('button'); if (!b) return; S.settings.view = b.dataset.v; save(); applyView(); };
+  $('[data-a=snames]', el).onchange = e => { S.settings.sheetNames = e.target.checked; save(); };
   // desenho das notas a cair
-  showFall(true, 'song');
+  showFall(true, 'song'); applyView();
+  Fall.drawSheet = () => drawSheet(P, song, sd);
   Fall.onFrame = update;
   Fall.draw = (g, W, H) => {
     const vis = 2.6 * P.speed, pps = H / vis;
@@ -1944,6 +1962,345 @@ function songPlayer(el, song) {
   };
   resetFrom(-2);
   return () => { Fall.draw = null; Fall.onFrame = null; $$('.overlay').forEach(o => o.remove()); };
+}
+
+/* =========================================================
+   PARTITURA A ROLAR (pauta dupla sincronizada com a música)
+   ========================================================= */
+const TREBLE_P1 = 'M0.15 0.15 C-0.45 0.1 -0.4 -0.85 0.3 -0.8 C1.15 -0.7 1.1 0.95 0.05 0.98 C-1.05 1.0 -1.2 -0.55 -0.25 -1.35 C0.55 -2.0 0.95 -3.4 0.4 -4.3 C0 -4.75 -0.55 -3.9 -0.3 -2.9 L0.5 2.25';
+const TREBLE_P2 = 'M0.5 2.25 C0.6 2.95 -0.25 3.15 -0.45 2.6';
+const BASS_P = 'M-0.6 0.05 C-0.65 -1.05 1.15 -1.25 1.25 0.05 C1.35 1.35 0.25 2.45 -0.85 2.95';
+const Sheet = { cv: $('#sheet'), g: null, W: 0, H: 0, dpr: 1, on: false };
+Sheet.g = Sheet.cv.getContext('2d');
+const SG = 9, STT = 34, STB = STT + 4 * SG, SBT = STB + 5 * SG, SBB = SBT + 4 * SG; // espaçamento e linhas das duas pautas
+function showSheet(on) { $('#dock').classList.toggle('with-sheet', !!on); Sheet.on = !!on; resizeSheet(); resizeFall(); updateDockH(); }
+function resizeSheet() {
+  if (!Sheet.on) return; const r = Sheet.cv.getBoundingClientRect(); Sheet.dpr = window.devicePixelRatio || 1;
+  Sheet.cv.width = Math.max(1, Math.round(r.width * Sheet.dpr)); Sheet.cv.height = Math.max(1, Math.round(r.height * Sheet.dpr)); Sheet.W = r.width; Sheet.H = r.height;
+}
+window.addEventListener('resize', resizeSheet);
+const QV = [4, 3, 2, 1.5, 1, .75, .5, .25];
+const nearestQ = r => QV.reduce((b, q) => Math.abs(Math.log(r / q)) < Math.abs(Math.log(r / b)) ? q : b, 1);
+function prepareSheet(song, notes) {
+  const beat = song.beat || 0.5, bpb = song.bpb || 4, qsec = song.qsec || beat;
+  const c = new Array(12).fill(0); notes.forEach(n => c[pcOf(n.m)]++);
+  const flats = c[10] > c[6] && c[10] + c[3] + c[8] > c[6] + c[1];
+  const items = notes.map(n => {
+    const q = n.q || nearestQ(Math.max(0.1, n.d / qsec));
+    const staff = n.h === 'L' ? 'bass' : 'treble';
+    const sp = spellMidi(n.m, flats ? 'flat' : 'sharp');
+    const st = sp.d - (staff === 'treble' ? dia(64) : dia(43));
+    const y = (staff === 'treble' ? STB : SBB) - st * SG / 2;
+    return { n, q, staff, acc: sp.acc, st, y };
+  });
+  const groups = [];
+  items.slice().sort((a, b) => (a.n.h < b.n.h ? -1 : a.n.h > b.n.h ? 1 : 0) || a.n.t - b.n.t).forEach(it => {
+    const g = groups[groups.length - 1];
+    if (g && g.h === it.n.h && Math.abs(g.t - it.n.t) < 0.03) { g.items.push(it); g.q = Math.min(g.q, it.q); }
+    else groups.push({ t: it.n.t, h: it.n.h, staff: it.staff, items: [it], q: it.q });
+  });
+  groups.forEach(g => {
+    const ys = g.items.map(i => i.y); g.yMin = Math.min(...ys); g.yMax = Math.max(...ys);
+    const mid = (g.staff === 'treble' ? STT : SBT) + 2 * SG;
+    g.up = (g.yMin + g.yMax) / 2 > mid;
+  });
+  groups.sort((a, b) => a.t - b.t);
+  // pausas: preencher silêncios de cada mão com pausas de semínima/mínima
+  const rests = [];
+  ['R', 'L'].forEach(h => {
+    const gs = groups.filter(g => g.h === h); if (!gs.length) return;
+    let cur = 0;
+    gs.forEach(g => {
+      let gap = g.t - cur;
+      while (gap >= 0.9 * qsec) { const k = gap >= 1.9 * qsec ? 2 : 1; rests.push({ t: cur, h, staff: h === 'L' ? 'bass' : 'treble', k }); cur += k * qsec; gap -= k * qsec; }
+      cur = Math.max(cur, g.t + g.q * qsec);
+    });
+  });
+  return { groups, rests, beat, bpb, flats, qsec };
+}
+function clefCanvas(g, kind, x, y) {
+  g.save(); g.translate(x, y); g.scale(SG, SG); g.strokeStyle = '#1d1b18'; g.fillStyle = '#1d1b18'; g.lineCap = 'round';
+  if (kind === 'treble') { g.lineWidth = 0.2; g.stroke(new Path2D(TREBLE_P1)); g.lineWidth = 0.17; g.stroke(new Path2D(TREBLE_P2)); g.beginPath(); g.arc(-0.3, 2.55, 0.3, 0, 7); g.fill(); }
+  else { g.lineWidth = 0.24; g.stroke(new Path2D(BASS_P)); g.beginPath(); g.arc(-0.35, 0.05, 0.4, 0, 7); g.fill(); g.beginPath(); g.arc(1.85, -0.5, 0.18, 0, 7); g.fill(); g.beginPath(); g.arc(1.85, 0.5, 0.18, 0, 7); g.fill(); }
+  g.restore();
+}
+function drawRest(g, k, x, staff) {
+  const top = staff === 'treble' ? STT : SBT;
+  g.fillStyle = '#1d1b18'; g.strokeStyle = '#1d1b18';
+  if (k === 2) { g.fillRect(x - 5, top + 2 * SG - SG / 2, 10, SG / 2); }
+  else {
+    g.save(); g.translate(x, top + 2 * SG); g.scale(SG, SG); g.lineWidth = 0.28; g.lineJoin = 'round';
+    g.beginPath(); g.moveTo(-0.2, -1.5); g.lineTo(0.4, -0.8); g.lineTo(-0.2, -0.1); g.lineTo(0.4, 0.6); g.quadraticCurveTo(-0.3, 0.35, 0.1, 1.3); g.stroke(); g.restore();
+  }
+}
+function drawSheet(P, song, sd) {
+  const g = Sheet.g, W = Sheet.W, H = Sheet.H; if (!W) return;
+  g.setTransform(Sheet.dpr, 0, 0, Sheet.dpr, 0, 0);
+  g.fillStyle = '#fffdf8'; g.fillRect(0, 0, W, H);
+  const cx = Math.min(190, W * 0.28), pxs = 80 / sd.qsec, left = 78;
+  const X = t => cx + (t - P.t) * pxs;
+  // linhas
+  g.strokeStyle = '#3a3631'; g.lineWidth = 1;
+  [STT, SBT].forEach(top => { for (let i = 0; i < 5; i++) { const y = top + i * SG + .5; g.beginPath(); g.moveTo(0, y); g.lineTo(W, y); g.stroke(); } });
+  // barras de compasso
+  const bar = sd.bpb * sd.beat; const t0 = P.t - (cx - left) / pxs, t1 = P.t + (W - cx) / pxs;
+  g.font = '600 9px "DM Sans", sans-serif'; g.textAlign = 'center';
+  for (let k = Math.max(0, Math.floor(t0 / bar)); k * bar <= t1; k++) {
+    const x = Math.round(X(k * bar)) + .5; if (x < left) continue;
+    g.strokeStyle = '#3a3631'; g.lineWidth = 1; g.beginPath(); g.moveTo(x, STT); g.lineTo(x, SBB); g.stroke();
+    g.fillStyle = '#9a9184'; g.fillText(k + 1, x + 8, STT - 8);
+  }
+  // pausas
+  sd.rests.forEach(r => { const x = X(r.t + sd.qsec * 0.3); if (x < left || x > W + 10) return; g.globalAlpha = userNoteFor(P, r.h) ? 1 : 0.35; drawRest(g, r.k, x, r.staff); });
+  g.globalAlpha = 1;
+  // notas
+  const names = S.settings.sheetNames;
+  for (const gr of sd.groups) {
+    const x = X(gr.t); if (x < left - 10) continue; if (x > W + 20) break;
+    const mine = userNoteFor(P, gr.h);
+    const pending = mine && P.mode !== 'listen' && gr.items.some(i => !i.n.st) && Math.abs(gr.t - P.t) < 0.06 + 0.02;
+    const colFor = it => it.n.st === 'hit' ? '#15803d' : it.n.st === 'miss' ? '#dc2626' : pending ? (gr.h === 'L' ? '#ea580c' : '#1d4ed8') : mine ? '#1d1b18' : '#b9b0a3';
+    const base = gr.staff === 'treble' ? dia(64) : dia(43), bottom = gr.staff === 'treble' ? STB : SBB;
+    gr.items.forEach(it => {
+      const col = colFor(it); g.strokeStyle = col; g.fillStyle = col;
+      // linhas suplementares
+      g.lineWidth = 1;
+      for (let k = -2; k >= it.st; k -= 2) { const y = bottom - k * SG / 2 + .5; g.strokeStyle = '#3a3631'; g.beginPath(); g.moveTo(x - 9, y); g.lineTo(x + 9, y); g.stroke(); }
+      for (let k = 10; k <= it.st; k += 2) { const y = bottom - k * SG / 2 + .5; g.strokeStyle = '#3a3631'; g.beginPath(); g.moveTo(x - 9, y); g.lineTo(x + 9, y); g.stroke(); }
+      g.strokeStyle = col;
+      g.beginPath(); g.ellipse(x, it.y, 5.3, 3.8, -0.35, 0, Math.PI * 2);
+      if (it.q >= 2) { g.lineWidth = it.q >= 4 ? 2 : 1.5; g.stroke(); } else g.fill();
+      if (it.acc) { g.font = '14px "Noto Music","DM Sans",serif'; g.textAlign = 'center'; g.fillText(it.acc > 0 ? '♯' : '♭', x - 13, it.y + 5); }
+      if ([3, 1.5, .75].includes(it.q)) { g.beginPath(); g.arc(x + 9, it.y - (it.st % 2 === 0 ? SG / 2 : 0), 1.6, 0, 7); g.fill(); }
+    });
+    // haste e colchetes
+    const q = gr.q, col = colFor(gr.items[0]);
+    if (q < 4) {
+      g.strokeStyle = col; g.lineWidth = 1.3; g.beginPath();
+      const sx = gr.up ? x + 5 : x - 5, y1 = gr.up ? gr.yMax : gr.yMin, y2 = gr.up ? gr.yMin - 3.3 * SG : gr.yMax + 3.3 * SG;
+      g.moveTo(sx, y1); g.lineTo(sx, y2); g.stroke();
+      const nf = q <= .375 ? 2 : q <= .75 ? 1 : 0;
+      for (let f = 0; f < nf; f++) { const yy = y2 + (gr.up ? f * 6 : -f * 6); g.beginPath(); g.moveTo(sx, yy); g.quadraticCurveTo(sx + 9, yy + (gr.up ? 7 : -7), sx + 6, yy + (gr.up ? 15 : -15)); g.stroke(); }
+    }
+    if (names) {
+      g.font = '600 9.5px "DM Sans", sans-serif'; g.textAlign = 'center'; g.fillStyle = mine ? '#6b645a' : '#c9c0b3';
+      const ly = gr.staff === 'treble' ? STB + 2.6 * SG : SBB + 2.6 * SG;
+      g.fillText(gr.items.map(i => S.settings.labels === 'en' ? NAMES_EN[pcOf(i.n.m)] : ptName(i.n.m)).join('·'), x, Math.min(H - 3, Math.max(ly, gr.yMax + 14)));
+    }
+  }
+  // margem com claves e compasso
+  g.fillStyle = '#fffdf8'; g.fillRect(0, 0, left, H);
+  g.strokeStyle = '#3a3631'; g.lineWidth = 1;
+  [STT, SBT].forEach(top => { for (let i = 0; i < 5; i++) { const y = top + i * SG + .5; g.beginPath(); g.moveTo(6, y); g.lineTo(left, y); g.stroke(); } });
+  g.lineWidth = 2; g.beginPath(); g.moveTo(6, STT); g.lineTo(6, SBB); g.stroke();
+  clefCanvas(g, 'treble', 20, STT + 3 * SG); clefCanvas(g, 'bass', 22, SBT + SG);
+  g.fillStyle = '#1d1b18'; g.font = '700 15px Fraunces, serif'; g.textAlign = 'center';
+  [STT, SBT].forEach(top => { g.fillText(sd.bpb, 60, top + 2 * SG - 2); g.fillText(song.den || 4, 60, top + 4 * SG - 2); });
+  // cursor
+  g.fillStyle = 'rgba(194,65,12,.12)'; g.fillRect(cx - 9, STT - 14, 18, SBB - STT + 28);
+  g.strokeStyle = '#c2410c'; g.lineWidth = 2; g.beginPath(); g.moveTo(cx, STT - 14); g.lineTo(cx, SBB + 14); g.stroke();
+}
+function userNoteFor(P, h) { return P.mode === 'listen' || P.hands === 'B' || P.hands === h; }
+
+/* =========================================================
+   GUIA: COMO LER UMA PARTITURA
+   ========================================================= */
+function noteSVG(x, y, { filled = true, stem = 'up', flags = 0, dot = false, color = '#1d1b18', g = 12 } = {}) {
+  let s = `<ellipse cx="${x}" cy="${y}" rx="${g * .66}" ry="${g * .47}" transform="rotate(-20 ${x} ${y})" fill="${filled ? color : 'none'}" stroke="${color}" stroke-width="${filled ? 0 : 1.8}"/>`;
+  if (stem) {
+    const sx = stem === 'up' ? x + g * .6 : x - g * .6, y2 = stem === 'up' ? y - 3.3 * g : y + 3.3 * g;
+    s += `<line x1="${sx}" x2="${sx}" y1="${y}" y2="${y2}" stroke="${color}" stroke-width="1.6"/>`;
+    for (let f = 0; f < flags; f++) { const yy = y2 + (stem === 'up' ? f * 7 : -f * 7); s += `<path d="M${sx} ${yy} q ${g * .9} ${stem === 'up' ? g * .7 : -g * .7} ${g * .55} ${stem === 'up' ? g * 1.5 : -g * 1.5}" fill="none" stroke="${color}" stroke-width="1.6"/>`; }
+  }
+  if (dot) s += `<circle cx="${x + g * 1.1}" cy="${y - g / 2}" r="2" fill="${color}"/>`;
+  return s;
+}
+function restSVG(kind, x, top, g = 12) {
+  if (kind === 'w') return `<rect x="${x - g * .6}" y="${top + g}" width="${g * 1.2}" height="${g / 2}" fill="#1d1b18"/>`;
+  if (kind === 'h') return `<rect x="${x - g * .6}" y="${top + 2 * g - g / 2}" width="${g * 1.2}" height="${g / 2}" fill="#1d1b18"/>`;
+  if (kind === 'q') return `<g transform="translate(${x} ${top + 2 * g}) scale(${g})"><path d="M-0.2 -1.5 L0.4 -0.8 L-0.2 -0.1 L0.4 0.6 Q-0.3 0.35 0.1 1.3" fill="none" stroke="#1d1b18" stroke-width="0.28" stroke-linejoin="round"/></g>`;
+  return `<g transform="translate(${x} ${top + 2 * g}) scale(${g})"><circle cx="-0.25" cy="-0.55" r="0.25" fill="#1d1b18"/><path d="M-0.1 -0.45 Q0.3 -0.35 0.55 -0.8 L0 1" fill="none" stroke="#1d1b18" stroke-width="0.17"/></g>`;
+}
+function staffLines(x1, x2, top, g = 12) { let s = ''; for (let i = 0; i < 5; i++) s += `<line x1="${x1}" x2="${x2}" y1="${top + i * g}" y2="${top + i * g}" stroke="#1d1b18" stroke-width="1.2"/>`; return s; }
+// pauta dupla com notas (m) — usada no explorador
+function grandStaffSVG(ms, { w = 420, flats = false } = {}) {
+  const g = 12, TT = 40, TB = TT + 4 * g, BT = TB + 6 * g, BB = BT + 4 * g;
+  let s = `<svg viewBox="0 0 ${w} ${BB + 60}" class="diagram">` + staffLines(10, w - 10, TT, g) + staffLines(10, w - 10, BT, g);
+  s += `<line x1="10" x2="10" y1="${TT}" y2="${BB}" stroke="#1d1b18" stroke-width="2.5"/>` + clefSVG('treble', 38, TT + 3 * g, g) + clefSVG('bass', 42, BT + g, g);
+  s += `<text x="${w - 14}" y="${TB + 3 * g + 4}" text-anchor="end" font-size="11" fill="#c2410c" font-weight="700">— Dó central fica aqui, entre as duas pautas</text>`;
+  const sorted = [...new Set(ms)].sort((a, b) => a - b);
+  sorted.forEach((m, i) => {
+    const treble = m >= 60, sp = spellMidi(m, flats ? 'flat' : 'sharp');
+    const base = treble ? dia(64) : dia(43), bottom = treble ? TB : BB, st = sp.d - base, y = bottom - st * g / 2;
+    const x = 150 + (sorted.length > 1 ? (i % 2) * 22 : 0);
+    for (let k = -2; k >= st; k -= 2) s += `<line x1="${x - 13}" x2="${x + 13}" y1="${bottom - k * g / 2}" y2="${bottom - k * g / 2}" stroke="#1d1b18" stroke-width="1.2"/>`;
+    for (let k = 10; k <= st; k += 2) s += `<line x1="${x - 13}" x2="${x + 13}" y1="${bottom - k * g / 2}" y2="${bottom - k * g / 2}" stroke="#1d1b18" stroke-width="1.2"/>`;
+    if (sp.acc) s += `<text x="${x - 22}" y="${y + 6}" font-size="18" text-anchor="middle" fill="#1d4ed8">${sp.acc > 0 ? '♯' : '♭'}</text>`;
+    s += noteSVG(x, y, { stem: null, color: treble ? '#1d4ed8' : '#c2410c', g });
+    s += `<text x="${x + 28}" y="${y + 4}" font-size="12" font-weight="700" fill="${treble ? '#1d4ed8' : '#c2410c'}">${fullName(m)}</text>`;
+  });
+  return s + '</svg>';
+}
+function describeNote(m) {
+  const treble = m >= 60, sp = spellMidi(m, 'sharp'), st = sp.d - (treble ? dia(64) : dia(43));
+  const where = st < 0 ? `por baixo da pauta (${Math.floor(-st / 2)} linha${Math.floor(-st / 2) === 1 ? '' : 's'} suplementar${Math.floor(-st / 2) === 1 ? '' : 'es'})` : st > 8 ? `por cima da pauta (${Math.floor((st - 8) / 2)} linha${Math.floor((st - 8) / 2) === 1 ? '' : 's'} suplementar${Math.floor((st - 8) / 2) === 1 ? '' : 'es'})` : st % 2 === 0 ? `na ${st / 2 + 1}ª linha a contar de baixo` : `no ${(st + 1) / 2}º espaço a contar de baixo`;
+  return `<b>${fullName(m)}</b>${m === 60 ? ' (Dó central)' : ''} — clave de ${treble ? 'sol (mão direita)' : 'fá (mão esquerda)'}, ${st < 0 || st > 8 ? where : where}.${sp.acc ? ' Tecla preta: escreve-se com ♯ (ou ♭ na nota de cima).' : ''}`;
+}
+const GUIDE = [
+  {
+    id: 'pauta', t: 'Pauta e claves', r(el) {
+      el.innerHTML = `<h2>A pauta e as claves</h2>
+      <p class="lead">A partitura de piano usa <b>duas pautas</b> juntas (pauta dupla). A de cima, com a <b>clave de sol</b>, é quase sempre a <b>mão direita</b>; a de baixo, com a <b>clave de fá</b>, a <b>mão esquerda</b>. Quanto mais alta a nota no papel, mais à direita no teclado.</p>
+      <div class="card split"><div data-r="gs"></div><ul class="facts">
+        <li><span class="dot blue"></span><span><b>Clave de sol</b>: o caracol enrola-se na 2ª linha — essa linha é o <b>Sol</b>. Linhas: Mi Sol Si Ré Fá. Espaços: Fá Lá Dó Mi.</span></li>
+        <li><span class="dot orange"></span><span><b>Clave de fá</b>: os dois pontos abraçam a 4ª linha — essa linha é o <b>Fá</b>. Linhas: Sol Si Ré Fá Lá. Espaços: Lá Dó Mi Sol.</span></li>
+        <li><span class="dot green"></span><span><b>Linhas suplementares</b>: pequenos traços para notas fora da pauta. O Dó central tem uma só, por baixo da clave de sol ou por cima da clave de fá.</span></li>
+        <li><span class="dot"></span><span><b>Truque de leitura</b>: não decores todas as notas. Usa marcos (Dó central, Sol da clave de sol, Fá da clave de fá) e conta por saltos a partir deles.</span></li></ul></div>
+      <div class="card task"><div class="task-h">Explorador</div><p class="prompt" data-r="desc">Toca qualquer tecla no teu piano (ou no ecrã) e vê onde ela fica na pauta. Experimenta acordes.</p></div>`;
+      let last = [60];
+      const show = ms => { $('[data-r=gs]', el).innerHTML = grandStaffSVG(ms); };
+      show(last);
+      cur.onKey = () => { last = [...held]; show(last); $('[data-r=desc]', el).innerHTML = last.length === 1 ? describeNote(last[0]) : last.length ? 'Acorde: ' + last.sort((a, b) => a - b).map(fullName).join(' · ') + '. Em acordes, as notas empilham-se umas por cima das outras.' : ''; };
+    }
+  },
+  {
+    id: 'figuras', t: 'Figuras e pausas', r(el) {
+      const g = 11, rows = [['Semibreve', 4, { filled: false, stem: null }, 'w'], ['Mínima', 2, { filled: false }, 'h'], ['Semínima', 1, {}, 'q'], ['Colcheia', .5, { flags: 1 }, 'e'], ['Semicolcheia', .25, { flags: 2 }, 'e']];
+      let s = `<svg viewBox="0 0 640 ${rows.length * 58 + 20}" class="diagram">`;
+      rows.forEach(([nm2, d, o, rk], i) => {
+        const top = 14 + i * 58; s += staffLines(10, 140, top, g);
+        s += noteSVG(48, top + 3 * g, { ...o, g }); s += rk === 'e' && d === .25 ? restSVG('e', 108, top, g) + restSVG('e', 118, top - g, g) : restSVG(rk, 108, top, g);
+        s += `<text x="158" y="${top + 2 * g}" font-size="14" font-weight="700">${nm2}</text><text x="158" y="${top + 3.6 * g}" font-size="12" fill="#6b645a">${d >= 1 ? d + (d > 1 ? ' tempos' : ' tempo') : d === .5 ? '½ tempo' : '¼ de tempo'}</text>`;
+        const W2 = 300 / (4 / d); for (let k = 0; k < 4 / d; k++) s += `<rect x="${320 + k * W2 + 1}" y="${top + 10}" width="${W2 - 2}" height="24" rx="5" fill="${['#dbe6ff', '#fde4d3', '#d3f0dc', '#f1ebdf', '#efe7d8'][i]}" stroke="${['#1d4ed8', '#c2410c', '#15803d', '#6b645a', '#9a9184'][i]}"/>`;
+      });
+      el.innerHTML = `<h2>Figuras e pausas</h2><p class="lead">A <b>forma</b> da nota diz quanto tempo ela dura. Cabeça oca = longa; cabeça cheia = curta; cada “bandeirinha” (colchete) corta a duração a metade. Ao lado de cada figura está a <b>pausa</b> com a mesma duração — um silêncio que também se conta.</p>
+      <div class="card">${s}</div><p class="note">Os blocos à direita mostram quantas figuras de cada tipo cabem num compasso de 4 tempos. Colcheias seguidas costumam estar unidas por uma barra (em vez de bandeirinhas) — vale o mesmo.</p>
+      <div class="row"><button class="btn" data-a="hear">▶ Ouvir: 1 semibreve, 2 mínimas, 4 semínimas, 8 colcheias</button></div>`;
+      $('[data-a=hear]', el).onclick = () => playSeq([{ n: [60], d: 4 }, { n: [62], d: 2 }, { n: [62], d: 2 }, ...[64, 64, 64, 64].map(m => ({ n: [m], d: 1 })), ...Array(8).fill(65).map(m => ({ n: [m], d: .5 }))], 100);
+    }
+  },
+  {
+    id: 'compasso', t: 'Compasso', r(el) {
+      const g = 11, top = 30; let s = `<svg viewBox="0 0 640 130" class="diagram">` + staffLines(10, 630, top, g) + clefSVG('treble', 34, top + 3 * g, g);
+      s += `<text x="70" y="${top + 2 * g - 2}" font-family="Fraunces" font-weight="700" font-size="22" text-anchor="middle">4</text><text x="70" y="${top + 4 * g - 2}" font-family="Fraunces" font-weight="700" font-size="22" text-anchor="middle">4</text>`;
+      [110, 150, 190, 230].forEach((x, i) => s += noteSVG(x, top + 3 * g - i * g / 2, { g }) + `<text x="${x}" y="${top + 6.6 * g}" text-anchor="middle" font-size="12" fill="#c2410c" font-weight="700">${i + 1}</text>`);
+      s += `<line x1="265" x2="265" y1="${top}" y2="${top + 4 * g}" stroke="#1d1b18" stroke-width="1.4"/>`;
+      s += noteSVG(300, top + 2 * g, { filled: false, g }) + noteSVG(380, top + 2.5 * g, { filled: false, g }) + `<text x="300" y="${top + 6.6 * g}" text-anchor="middle" font-size="12" fill="#c2410c" font-weight="700">1 2</text><text x="380" y="${top + 6.6 * g}" text-anchor="middle" font-size="12" fill="#c2410c" font-weight="700">3 4</text>`;
+      s += `<line x1="430" x2="430" y1="${top}" y2="${top + 4 * g}" stroke="#1d1b18" stroke-width="1.4"/>` + noteSVG(480, top + 3 * g, { filled: false, stem: null, g }) + `<text x="480" y="${top + 6.6 * g}" text-anchor="middle" font-size="12" fill="#c2410c" font-weight="700">1 2 3 4</text>`;
+      s += `<line x1="600" x2="600" y1="${top}" y2="${top + 4 * g}" stroke="#1d1b18" stroke-width="1.4"/><rect x="606" y="${top}" width="5" height="${4 * g}" fill="#1d1b18"/></svg>`;
+      el.innerHTML = `<h2>Compasso</h2><p class="lead">A música divide-se em <b>compassos</b>, separados por barras verticais. Os dois números no início (a <b>fórmula de compasso</b>) dizem: em cima, <b>quantos tempos</b> tem cada compasso; em baixo, <b>que figura vale um tempo</b> (4 = semínima, 8 = colcheia).</p>
+      <div class="card">${s}</div>
+      <div class="card"><ul class="facts">
+        <li><span class="dot blue"></span><span><b>4/4</b> (também escrito <b>C</b>): 4 semínimas por compasso — o mais comum (Ode à Alegria, quase todo o pop).</span></li>
+        <li><span class="dot orange"></span><span><b>3/4</b>: 3 tempos — valsa, minueto, “Parabéns a você”. Conta “1-2-3, 1-2-3”, com o 1 mais forte.</span></li>
+        <li><span class="dot green"></span><span><b>6/8</b>: 6 colcheias, sentidas em 2 grupos de 3 (balanço).</span></li>
+        <li><span class="dot"></span><span>A barra dupla grossa no fim (‖) marca o <b>fim da música</b>. No modo Músicas, os números pequenos por cima da partitura são os números dos compassos.</span></li></ul></div>
+      <div class="row"><button class="btn" data-a="b4">▶ Ouvir 4/4</button><button class="btn ghost" data-a="b3">▶ Ouvir 3/4</button></div>`;
+      const beats = n => { clearTimers(); const c = ac(); for (let i = 0; i < n * 3; i++) click(c.currentTime + 0.1 + i * 0.55, i % n === 0); };
+      $('[data-a=b4]', el).onclick = () => beats(4); $('[data-a=b3]', el).onclick = () => beats(3);
+    }
+  },
+  {
+    id: 'acidentes', t: 'Acidentes e armação', r(el) {
+      const g = 11, top = 30; let s = `<svg viewBox="0 0 640 120" class="diagram">` + staffLines(10, 630, top, g) + clefSVG('treble', 34, top + 3 * g, g);
+      const F = top + 3.5 * g; // Fá (1º espaço)
+      s += noteSVG(110, F, { g }) + `<text x="110" y="${top + 6.8 * g}" text-anchor="middle" font-size="12" font-weight="700">Fá</text>`;
+      s += `<text x="168" y="${F + 7}" font-size="20" text-anchor="middle" fill="#1d4ed8">♯</text>` + noteSVG(190, F, { g, color: '#1d4ed8' }) + `<text x="190" y="${top + 6.8 * g}" text-anchor="middle" font-size="12" font-weight="700" fill="#1d4ed8">Fá♯</text>`;
+      s += `<text x="248" y="${F + 7}" font-size="20" text-anchor="middle" fill="#c2410c">♭</text>` + noteSVG(270, F, { g, color: '#c2410c' }) + `<text x="270" y="${top + 6.8 * g}" text-anchor="middle" font-size="12" font-weight="700" fill="#c2410c">Fá♭ (= Mi)</text>`;
+      s += `<text x="328" y="${F + 7}" font-size="20" text-anchor="middle" fill="#15803d">♮</text>` + noteSVG(350, F, { g, color: '#15803d' }) + `<text x="350" y="${top + 6.8 * g}" text-anchor="middle" font-size="12" font-weight="700" fill="#15803d">Fá natural</text>`;
+      s += `<line x1="410" x2="410" y1="${top}" y2="${top + 4 * g}" stroke="#1d1b18" stroke-width="2"/>` + clefSVG('treble', 434, top + 3 * g, g) + `<text x="470" y="${top + 7}" font-size="20" text-anchor="middle" fill="#1d4ed8">♯</text><text x="540" y="${top + 6.8 * g}" text-anchor="middle" font-size="12" font-weight="700" fill="#1d4ed8">armação de Sol maior</text></svg>`;
+      el.innerHTML = `<h2>Acidentes e armação de clave</h2><p class="lead">Os <b>acidentes</b> mudam a nota meio-tom: <b>♯ sustenido</b> sobe (tecla imediatamente à direita), <b>♭ bemol</b> desce (imediatamente à esquerda), <b>♮ bequadro</b> cancela e volta à nota “normal”.</p>
+      <div class="card">${s}</div>
+      <div class="card"><ul class="facts">
+        <li><span class="dot blue"></span><span>Um acidente escrito ao lado de uma nota <b>vale até ao fim desse compasso</b>, para essa mesma nota.</span></li>
+        <li><span class="dot orange"></span><span>A <b>armação de clave</b> são os ♯ ou ♭ logo a seguir à clave: valem para <b>toda a música</b> e em todas as oitavas. Um ♯ na linha do Fá = todos os Fá são Fá♯ (é o tom de Sol maior).</span></li>
+        <li><span class="dot green"></span><span>Ordem dos sustenidos: Fá Dó Sol Ré Lá Mi Si. Ordem dos bemóis: ao contrário (Si Mi Lá Ré Sol Dó Fá). Vê as escalas em <b>Escalas e acordes</b> para perceber porquê.</span></li></ul></div>`;
+    }
+  },
+  {
+    id: 'ligaduras', t: 'Pontos e ligaduras', r(el) {
+      const g = 11, top = 34; let s = `<svg viewBox="0 0 640 130" class="diagram">` + staffLines(10, 630, top, g);
+      s += noteSVG(60, top + 3 * g, { filled: false, dot: true, g }) + `<text x="75" y="${top + 7 * g}" text-anchor="middle" font-size="11" font-weight="700">Ponto: 2+1 = 3 tempos</text>`;
+      s += noteSVG(210, top + 2 * g, { filled: false, g }) + noteSVG(280, top + 2 * g, { g }) + `<path d="M214 ${top + 2 * g + 9} Q245 ${top + 2 * g + 22} 276 ${top + 2 * g + 9}" fill="none" stroke="#c2410c" stroke-width="2"/><text x="245" y="${top + 7 * g}" text-anchor="middle" font-size="11" font-weight="700" fill="#c2410c">Prolongação: 2+1 = 3 tempos</text>`;
+      [380, 420, 460, 500].forEach((x, i) => s += noteSVG(x, top + 3 * g - i * g / 2, { g }));
+      s += `<path d="M378 ${top - 6 - 0} Q440 ${top - 34} 506 ${top - 22}" fill="none" stroke="#1d4ed8" stroke-width="2"/><text x="440" y="${top + 7 * g}" text-anchor="middle" font-size="11" font-weight="700" fill="#1d4ed8">Expressão (legato)</text>`;
+      s += noteSVG(580, top + 2.5 * g, { g }) + `<circle cx="580" cy="${top + 2.5 * g + 15}" r="2.2" fill="#15803d"/><text x="580" y="${top + 7 * g}" text-anchor="middle" font-size="11" font-weight="700" fill="#15803d">Staccato</text></svg>`;
+      el.innerHTML = `<h2>Pontos e ligaduras</h2><p class="lead">Pequenos sinais que mudam a duração ou a maneira de tocar.</p><div class="card">${s}</div>
+      <div class="card"><ul class="facts">
+        <li><span class="dot"></span><span><b>Ponto de aumento</b> (à direita da nota): acrescenta <b>metade</b> do valor. Mínima com ponto = 2 + 1 = 3 tempos; semínima com ponto = 1½.</span></li>
+        <li><span class="dot orange"></span><span><b>Ligadura de prolongação</b>: liga duas notas <b>iguais</b> — tocas só a primeira e manténs carregada pela soma das durações.</span></li>
+        <li><span class="dot blue"></span><span><b>Ligadura de expressão</b>: arco sobre notas <b>diferentes</b> — toca-as ligadas, sem levantar o som entre elas (legato).</span></li>
+        <li><span class="dot green"></span><span><b>Staccato</b> (ponto por cima/baixo da cabeça): nota curta e destacada.</span></li></ul></div>
+      <div class="row"><button class="btn" data-a="leg">▶ Legato</button><button class="btn ghost" data-a="stac">▶ Staccato</button></div>`;
+      $('[data-a=leg]', el).onclick = () => playSeq([60, 62, 64, 65, 67].map(m => ({ n: [m], d: 1 })), 110);
+      $('[data-a=stac]', el).onclick = () => { clearTimers(); [60, 62, 64, 65, 67].forEach((m, i) => playNote(m, 0.12, .8, 0.05 + i * 0.55)); };
+    }
+  },
+  {
+    id: 'dinamica', t: 'Dinâmica', r(el) {
+      const DYN = [['pp', 'pianíssimo', 'muito suave', 0, 30], ['p', 'piano', 'suave', 30, 50], ['mp', 'mezzo-piano', 'meio suave', 50, 65], ['mf', 'mezzo-forte', 'meio forte', 65, 82], ['f', 'forte', 'forte', 82, 102], ['ff', 'fortíssimo', 'muito forte', 102, 128]];
+      el.innerHTML = `<h2>Dinâmica: forte e suave</h2><p class="lead">As letras em itálico por baixo da pauta dizem <b>com que força</b> tocar. Vêm do italiano: <i>piano</i> = suave, <i>forte</i> = forte. Os “ganchos” &lt; e &gt; pedem para ir ficando mais forte (<i>crescendo</i>) ou mais suave (<i>diminuendo</i>).</p>
+      <div class="card"><div class="grid g3">${DYN.map(d => `<div class="stat" data-dyn="${d[0]}"><div class="v" style="font-style:italic">${d[0]}</div><div class="k"><b>${d[1]}</b> — ${d[2]}</div></div>`).join('')}</div></div>
+      <div class="card task"><div class="task-h">Experimenta no teu piano</div><p class="prompt">Toca uma tecla com força e outra muito suave. A tua P-45 envia a força de cada tecla; eu mostro a dinâmica correspondente.</p>
+      <div class="bar" style="height:16px;margin:10px 0"><i data-r="vel" style="transition:width .15s"></i></div><div class="big" data-r="dyn">—</div>
+      <p class="note">Desafio: consegues tocar 6 notas seguidas, cada uma numa dinâmica diferente, de pp a ff?</p></div>`;
+      cur.onKey = (m, v, src) => {
+        const vel = Math.round(v * 127); const d = DYN.find(x => vel >= x[3] && vel < x[4]) || DYN[5];
+        $('[data-r=vel]', el).style.width = (vel / 127 * 100) + '%';
+        $('[data-r=dyn]', el).innerHTML = `<i>${d[0]}</i> <small>${d[1]} · força ${vel}/127${src === 'midi' ? '' : ' (no ecrã: carrega mais em baixo na tecla para tocar mais forte)'}</small>`;
+        $$('[data-dyn]', el).forEach(x => x.style.borderColor = x.dataset.dyn === d[0] ? 'var(--accent)' : '');
+      };
+    }
+  },
+  {
+    id: 'andamento', t: 'Andamento', r(el) {
+      const T = [['Largo', 'muito lento e solene', 50], ['Adagio', 'lento, calmo', 66], ['Andante', 'ao passo de quem caminha', 84], ['Moderato', 'moderado', 104], ['Allegro', 'rápido e alegre', 132], ['Presto', 'muito rápido', 176]];
+      el.innerHTML = `<h2>Andamento</h2><p class="lead">O <b>andamento</b> é a velocidade da música, escrito por cima da pauta com uma palavra italiana ou com um número de metrónomo: <b>♩ = 100</b> significa 100 semínimas por minuto (BPM).</p>
+      <div class="card"><div class="reclist">${T.map((t, i) => `<div class="recitem"><span class="nm">${t[0]} <small>${t[1]} · cerca de ${t[2]} BPM</small></span><button class="btn sm" data-i="${i}">▶ Ouvir</button></div>`).join('')}</div></div>
+      <p class="note">Outros termos: <i>ritardando / rit.</i> = ir abrandando; <i>accelerando</i> = ir acelerando; <i>a tempo</i> = voltar à velocidade original. No modo Músicas usa a velocidade a 50–70% até a peça sair limpa, e só depois sobe.</p>`;
+      $('.reclist', el).onclick = e => { const b = e.target.closest('button'); if (!b) return; clearTimers(); const bpm = T[+b.dataset.i][2]; const c = ac(); for (let i = 0; i < 8; i++) click(c.currentTime + 0.1 + i * 60 / bpm, i % 4 === 0); };
+    }
+  },
+  {
+    id: 'repeticoes', t: 'Repetições', r(el) {
+      const g = 11, top = 36; let s = `<svg viewBox="0 0 640 140" class="diagram">` + staffLines(10, 630, top, g);
+      const rep = (x, dir) => `<rect x="${dir > 0 ? x : x - 5}" y="${top}" width="5" height="${4 * g}" fill="#1d1b18"/><line x1="${x + dir * 9}" x2="${x + dir * 9}" y1="${top}" y2="${top + 4 * g}" stroke="#1d1b18" stroke-width="1.4"/><circle cx="${x + dir * 16}" cy="${top + 1.5 * g}" r="2.6" fill="#1d1b18"/><circle cx="${x + dir * 16}" cy="${top + 2.5 * g}" r="2.6" fill="#1d1b18"/>`;
+      s += rep(40, 1) + `<text x="150" y="${top - 10}" font-size="12" text-anchor="middle" fill="#6b645a">trecho a repetir</text>` + rep(260, -1);
+      s += `<path d="M270 ${top - 8} V${top - 22} H400" fill="none" stroke="#c2410c" stroke-width="1.6"/><text x="282" y="${top - 26}" font-size="12" fill="#c2410c" font-weight="700">1.</text>`;
+      s += `<line x1="400" x2="400" y1="${top}" y2="${top + 4 * g}" stroke="#1d1b18" stroke-width="1.4"/><path d="M410 ${top - 8} V${top - 22} H540" fill="none" stroke="#1d4ed8" stroke-width="1.6"/><text x="422" y="${top - 26}" font-size="12" fill="#1d4ed8" font-weight="700">2.</text>`;
+      s += `<text x="230" y="${top + 6.6 * g}" font-size="12" text-anchor="middle" font-weight="700">tocar 2 vezes ↺</text><text x="470" y="${top + 6.6 * g}" font-size="12" text-anchor="middle" font-weight="700" fill="#1d4ed8">2ª vez salta para aqui</text></svg>`;
+      el.innerHTML = `<h2>Repetições</h2><p class="lead">Para poupar papel, as partituras usam sinais que mandam <b>voltar atrás</b>.</p><div class="card">${s}</div>
+      <div class="card"><ul class="facts">
+        <li><span class="dot"></span><span><b>Barras de repetição</b> (barra grossa com dois pontos): toca o trecho entre elas duas vezes.</span></li>
+        <li><span class="dot orange"></span><span><b>Casas 1. e 2.</b> (voltas): na 1ª vez tocas a casa 1 e voltas atrás; na 2ª vez saltas a casa 1 e tocas a 2. A <b>Para Elisa</b> da app usa exatamente isto.</span></li>
+        <li><span class="dot blue"></span><span><b>D.C.</b> (<i>da capo</i>) = volta ao início. <b>D.S.</b> (<i>dal segno</i>) = volta ao sinal 𝄋. <b>Fine</b> = acaba aqui. <b>Coda</b> (𝄌) = salta para a secção final.</span></li></ul></div>
+      <p class="note">No leitor de músicas não precisas de seguir estes sinais: a partitura já aparece “desdobrada”, com as repetições escritas por extenso.</p>`;
+    }
+  },
+  {
+    id: 'outros', t: 'Dedilhação e pedal', r(el) {
+      const g = 11, top = 40; let s = `<svg viewBox="0 0 640 150" class="diagram">` + staffLines(10, 630, top, g);
+      [[60, 1], [100, 2], [140, 3], [180, 4], [220, 5]].forEach(([x, f], i) => { s += noteSVG(x, top + 5 * g - i * g / 2 - g, { g }); s += `<text x="${x + 6}" y="${top - 26}" text-anchor="middle" font-size="13" font-weight="700" fill="#1d4ed8">${f}</text>`; });
+      s += `<text x="140" y="${top + 8.2 * g}" font-size="12" text-anchor="middle" font-weight="700" fill="#1d4ed8">números = dedos (1 = polegar)</text>`;
+      s += noteSVG(330, top + 2 * g, { filled: false, g }) + noteSVG(400, top + 2.5 * g, { filled: false, g });
+      s += `<text x="320" y="${top + 6.4 * g}" font-family="Fraunces" font-style="italic" font-weight="700" font-size="15">Ped.</text><text x="430" y="${top + 6.4 * g}" font-size="18">✱</text>`;
+      s += `<path d="M320 ${top + 7.2 * g} V${top + 8 * g} H450 V${top + 7.2 * g}" fill="none" stroke="#c2410c" stroke-width="1.6"/><text x="385" y="${top + 9.6 * g}" text-anchor="middle" font-size="12" font-weight="700" fill="#c2410c">pedal carregado de “Ped.” até ✱</text>`;
+      s += noteSVG(540, top + 2.5 * g, { g }) + `<path d="M528 ${top - 10} Q540 ${top - 28} 552 ${top - 10}" fill="none" stroke="#1d1b18" stroke-width="2"/><circle cx="540" cy="${top - 14}" r="2" fill="#1d1b18"/><text x="540" y="${top + 8.2 * g}" font-size="12" text-anchor="middle" font-weight="700">Fermata: segura mais</text></svg>`;
+      el.innerHTML = `<h2>Dedilhação, pedal e outros sinais</h2><div class="card">${s}</div>
+      <div class="card"><ul class="facts">
+        <li><span class="dot blue"></span><span><b>Dedilhação</b>: os números por cima (mão direita) ou por baixo (mão esquerda) dizem que dedo usar. Segue-os no início — evitam que fiques “sem dedos” a meio de uma frase.</span></li>
+        <li><span class="dot orange"></span><span><b>Pedal</b> (o pedal da direita da tua P-45): “Ped.” = carrega; ✱ = levanta. Em partituras modernas aparece uma linha com um “^” onde trocas o pedal (levantas e voltas a carregar).</span></li>
+        <li><span class="dot"></span><span><b>Fermata</b> (olho com ponto): segura a nota mais tempo do que o escrito. <b>8va</b>: toca uma oitava acima do escrito. <b>&gt;</b> (acento): essa nota mais forte.</span></li></ul></div>`;
+    }
+  },
+];
+function viewPartitura(el, arg) {
+  let i = Math.max(0, GUIDE.findIndex(x => x.id === arg));
+  el.innerHTML = `<div class="kicker">Partitura</div><div class="subnav">${GUIDE.map((x, k) => `<button data-i="${k}" class="${k === i ? 'on' : ''}">${k + 1}. ${x.t}</button>`).join('')}</div><div class="gz"></div><div class="row nx"></div>`;
+  $('.subnav', el).onclick = e => { const b = e.target.closest('button'); if (b) go('partitura', GUIDE[+b.dataset.i].id); };
+  GUIDE[i].r($('.gz', el));
+  if (i < GUIDE.length - 1) { $('.nx', el).innerHTML = `<button class="btn ghost">Seguinte: ${GUIDE[i + 1].t} →</button>`; $('.nx button', el).onclick = () => go('partitura', GUIDE[i + 1].id); }
+  else { $('.nx', el).innerHTML = `<button class="btn acc">🎵 Praticar a ler nas Músicas (vista Partitura)</button>`; $('.nx button', el).onclick = () => { S.settings.view = 'both'; save(); go('musicas', 'ode'); }; }
 }
 
 /* =========================================================
@@ -2316,7 +2673,7 @@ function viewDefinicoes(el) {
 const VIEWS = [
   ['inicio', '🏠', 'Início', viewInicio], ['licoes', '📚', 'Lições', viewLicoes], ['musicas', '🎵', 'Músicas', viewMusicas],
   ['treino', '💪', 'Treino do dia', viewTreino], ['ouvido', '👂', 'Treino de ouvido', viewOuvido], ['leitura', '👁', 'Leitura de pauta', viewLeitura],
-  ['ritmo', '🥁', 'Ritmo', viewRitmo], ['biblioteca', '📖', 'Escalas e acordes', viewBiblioteca], ['livre', '🎹', 'Tocar livre', viewLivre], ['definicoes', '⚙️', 'Definições', viewDefinicoes],
+  ['ritmo', '🥁', 'Ritmo', viewRitmo], ['biblioteca', '📖', 'Escalas e acordes', viewBiblioteca], ['partitura', '📜', 'Ler partitura', viewPartitura], ['livre', '🎹', 'Tocar livre', viewLivre], ['definicoes', '⚙️', 'Definições', viewDefinicoes],
 ];
 let curView = null, cleanup = null;
 function renderNav() {
@@ -2326,7 +2683,7 @@ function renderNav() {
 $('#nav').addEventListener('click', e => { const b = e.target.closest('.navb'); if (b) go(b.dataset.v); });
 function go(id, arg) {
   if (cleanup) { try { cleanup(); } catch (e) { console.error(e); } }
-  cleanup = null; clearTimers(); Metro.stop(); Metro.onBeat = null; showFall(false); Fall.draw = null; releaseAll();
+  cleanup = null; clearTimers(); Metro.stop(); Metro.onBeat = null; showFall(false); Fall.draw = null; Fall.drawSheet = null; showSheet(false); $('#dock').classList.remove('nofall'); releaseAll();
   transpose = 0; cur = {}; setMarks({}); $$('.overlay').forEach(o => o.remove());
   const v = VIEWS.find(x => x[0] === id) || VIEWS[0];
   curView = v[0]; renderNav();
