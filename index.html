@@ -1926,7 +1926,7 @@ function songPlayer(el, song) {
     <div class="grp">Mão <div class="seg" data-g="hands"><button data-v="R" ${hasR ? '' : 'disabled'}>Direita</button><button data-v="L" ${hasL ? '' : 'disabled'}>Esquerda</button><button data-v="B">Ambas</button></div></div>
   </div>
   <div class="ctrls">
-    <div class="grp">Velocidade <input type="range" min="25" max="150" step="5" value="100" data-a="speed"> <b data-r="speed">100%</b></div>
+    <div class="grp">Velocidade <div class="seg" data-g="speed">${[0.25, 0.5, 0.75, 1, 1.5].map(v => `<button data-v="${v}" class="${v === 1 ? 'on' : ''}">${String(v).replace('.', ',')}×</button>`).join('')}</div></div>
     <div class="grp">Ciclo <button class="btn ghost sm" data-a="A">A</button><button class="btn ghost sm" data-a="B">B</button><button class="btn ghost sm" data-a="noloop">✕</button></div>
     <label class="tg"><input type="checkbox" data-a="metro"> Metrónomo</label>
     <label class="tg"><input type="checkbox" data-a="names" ${S.settings.fallNames ? 'checked' : ''}> Nomes nas notas</label>
@@ -2024,7 +2024,7 @@ function songPlayer(el, song) {
   $('[data-a=restart]', el).onclick = () => { resetFrom(P.A ?? -2); resetScore(); };
   $(`[data-g=mode]`, el).onclick = e => { const b = e.target.closest('button'); if (!b) return; P.mode = b.dataset.v; segSet('mode', P.mode); resetFrom(Math.min(P.t, P.t)); resetScore(); };
   $(`[data-g=hands]`, el).onclick = e => { const b = e.target.closest('button'); if (!b || b.disabled) return; P.hands = b.dataset.v; segSet('hands', P.hands); resetFrom(P.t); };
-  const sp = $('[data-a=speed]', el); sp.oninput = () => { P.speed = sp.value / 100; R('speed').textContent = sp.value + '%'; };
+  $('[data-g=speed]', el).onclick = e => { const b = e.target.closest('button'); if (!b) return; P.speed = +b.dataset.v; segSet('speed', b.dataset.v); };
   $('[data-a=metro]', el).onchange = e => { P.metro = e.target.checked; };
   $('[data-a=names]', el).onchange = e => { S.settings.fallNames = e.target.checked; save(); };
   function showLoop() { const lp = $('.prog .loop', el); if (P.A == null) { lp.style.display = 'none'; return; } lp.style.display = 'block'; lp.style.left = (Math.max(0, P.A) / song.dur * 100) + '%'; lp.style.width = (((P.B ?? song.dur) - Math.max(0, P.A)) / song.dur * 100) + '%'; }
@@ -2045,7 +2045,7 @@ function songPlayer(el, song) {
   Fall.drawSheet = () => drawSheet(P, song, sd);
   Fall.onFrame = update;
   Fall.draw = (g, W, H) => {
-    const vis = 2.6 * P.speed, pps = H / vis;
+    const vis = 2.6, pps = H / vis; // janela fixa em tempo da música: a 0,5× as notas caem a metade da velocidade
     if (song.beat) {
       const b0 = Math.ceil(P.t / song.beat), b1 = Math.floor((P.t + vis) / song.beat);
       for (let b = Math.max(0, b0); b <= b1; b++) { const y = H - (b * song.beat - P.t) * pps; g.fillStyle = b % song.bpb === 0 ? 'rgba(255,255,255,.16)' : 'rgba(255,255,255,.05)'; g.fillRect(0, y, W, 1); }
