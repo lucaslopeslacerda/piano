@@ -1595,7 +1595,31 @@ function buildSong(def) {
 }
 const SONGS = SONG_DEFS.map(buildSong);
 function importedSongs() { return S.imported.map(s => ({ id: s.id, title: s.title, by: s.by || 'Importada', lvl: 0, notes: s.n.map(([m, t, d, h]) => ({ m, t, d, h: h ? 'L' : 'R', v: 0.7 })), dur: s.dur, beat: s.beat || null, bpb: 4, imported: true })); }
-function findSong(id) { return SONGS.find(s => s.id === id) || importedSongs().find(s => s.id === id); }
+function findSong(id) { return SONGS.find(s => s.id === id) || importedSongs().find(s => s.id === id) || cloudParsed[id]; }
+/* ---------- Biblioteca partilhada: pasta "musicas" do repositório GitHub ---------- */
+const GH = (() => { const h = location.hostname; if (h.endsWith('.github.io')) return { owner: h.split('.')[0], repo: location.pathname.split('/')[1] || h }; return { owner: 'lucaslopeslacerda', repo: 'piano' }; })();
+GH.dir = 'musicas';
+let cloudList = null; const cloudParsed = {};
+async function loadCloudList(force) {
+  if (cloudList && !force) return cloudList;
+  try { const c = JSON.parse(sessionStorage.getItem('ghList') || 'null'); if (!force && c && Date.now() - c.t < 300000) return (cloudList = c.l); } catch (e) { }
+  const r = await fetch(`https://api.github.com/repos/${GH.owner}/${GH.repo}/contents/${GH.dir}?ref=main`, { headers: { Accept: 'application/vnd.github+json' } });
+  if (r.status === 404) return (cloudList = []);
+  if (!r.ok) throw new Error(r.status === 403 ? 'limite de pedidos do GitHub atingido; tenta daqui a uns minutos' : 'erro ' + r.status);
+  const j = await r.json();
+  cloudList = j.filter(f => f.type === 'file' && /\.midi?$/i.test(f.name)).map(f => ({ id: 'gh_' + f.sha.slice(0, 12), name: f.name.replace(/\.midi?$/i, '').replace(/[_]+/g, ' '), url: f.download_url }))
+    .sort((a, b) => a.name.localeCompare(b.name, 'pt'));
+  try { sessionStorage.setItem('ghList', JSON.stringify({ t: Date.now(), l: cloudList })); } catch (e) { }
+  return cloudList;
+}
+async function loadCloudSong(id) {
+  if (cloudParsed[id]) return cloudParsed[id];
+  const list = await loadCloudList(); const f = list.find(x => x.id === id); if (!f) throw new Error('música não encontrada na pasta');
+  const r = await fetch(f.url); if (!r.ok) throw new Error('erro ' + r.status);
+  const m = parseMidi(await r.arrayBuffer());
+  const notes = m.notes.filter(n => n.h).map(n => ({ m: n.m, t: n.t, d: n.d, h: n.h, v: n.v || .7 }));
+  return (cloudParsed[id] = { id, title: f.name, by: 'Biblioteca (GitHub)', lvl: 0, notes, dur: Math.max(...notes.map(n => n.t + n.d)), beat: m.beat, bpb: 4, imported: true });
+}
 function storeImported(title, notes, beat, by) {
   if (notes.length > 6000) { toast('Ficheiro muito grande para guardar; fica disponível só nesta sessão.'); }
   const id = 'imp' + Date.now().toString(36);
@@ -1682,25 +1706,38 @@ function download(data, name, type) { const a = document.createElement('a'); a.h
 function starsHtml(n) { return '<span class="stars">' + [1, 2, 3].map(i => i <= n ? '★' : '<span class="off">★</span>').join('') + '</span>'; }
 function viewMusicas(el, arg) {
   if (arg === 'importar' && pendingImport) return importDialog(el, pendingImport);
-  if (arg) { const s = findSong(arg); if (s) return songPlayer(el, s); }
+  if (arg) {
+    const s = findSong(arg); if (s) return songPlayer(el, s);
+    if (arg.startsWith('gh_')) { el.innerHTML = '<p class="note">A carregar a música…</p>'; loadCloudSong(arg).then(() => go('musicas', arg)).catch(er => { el.innerHTML = `<p class="fb bad">Não consegui abrir a música: ${esc(er.message)}</p>`; }); return; }
+  }
   const card = s => { const r = S.songs[s.id]; return `<button class="song" data-id="${s.id}"><b>${esc(s.title)}</b><span class="by">${esc(s.by)}${s.imported ? '' : ' · ' + (s.notes.some(n => n.h === 'L') ? 'duas mãos' : 'mão direita')}</span><div class="meta"><span class="lvl">${s.lvl ? [1, 2, 3].map(i => `<i class="${i <= s.lvl ? 'on' : ''}"></i>`).join('') : '📂 ' + Math.round(s.dur) + ' s'}</span>${starsHtml(r ? r.stars : 0)}</div></button>`; };
   const imp = importedSongs();
   el.innerHTML = `<div class="kicker">Músicas</div><h2>Toca músicas com as notas a cair</h2>
   <p class="lead">Escolhe uma música. No leitor podes <b>ouvir</b>, praticar em modo <b>Esperar</b> (a música só avança quando tocas as teclas certas) ou <b>Ritmo</b> (pontuação a tempo), escolher a mão, mudar a velocidade e repetir um trecho em ciclo.</p>
   <div class="songs">${SONGS.map(card).join('')}
     <label class="song imp"><input type="file" accept=".mid,.midi,audio/midi,audio/x-midi" multiple hidden><b>📂 Adicionar música (ficheiro .mid)</b><span class="by">Podes escolher vários de uma vez</span></label></div>
-  ${imp.length ? `<h3 style="margin-top:24px">As tuas músicas (${imp.length})</h3><div class="songs">${imp.map(card).join('')}</div>
+  <div class="row sp" style="margin-top:24px"><h3 style="margin:0">📁 Biblioteca partilhada <span class="note">(pasta “musicas” no GitHub — aparece em todos os aparelhos)</span></h3><button class="btn ghost sm" data-a="ghr">↻ Atualizar</button></div>
+  <div class="songs" data-r="gh" style="margin-top:10px"><p class="note">A carregar…</p></div>
+  ${imp.length ? `<h3 style="margin-top:24px">Só neste aparelho (${imp.length})</h3><div class="songs">${imp.map(card).join('')}</div>
   <details class="card" style="margin-top:12px"><summary style="cursor:pointer;font-weight:600">Gerir as tuas músicas (mudar nome, apagar)</summary><div class="reclist" data-r="mg">${S.imported.map((x, i) => `<div class="recitem"><input value="${esc(x.title)}" data-ren="${i}" style="flex:1;min-width:160px;font:inherit;padding:6px 8px;border:1.5px solid var(--line);border-radius:8px"><button class="btn ghost sm" data-del="${i}">🗑 Apagar</button></div>`).join('')}</div></details>` : ''}
   <div class="card" style="margin-top:18px"><h3>Como adicionar músicas</h3>
     <ol style="line-height:1.65;margin:0;padding-left:20px">
       <li><b>O que é um ficheiro .mid (MIDI)?</b> Não é uma gravação de som como um MP3. É uma <b>lista de instruções</b>: que tecla carregar, quando, durante quanto tempo e com que força — exatamente o que o teu P-45 envia pelo cabo. Por isso esta app consegue transformá-lo em notas a cair e verificar se tocas certo. Um ficheiro MIDI de uma música inteira ocupa só alguns KB.</li>
       <li><b>Onde arranjar:</b> procura a música + “piano MIDI” num site de partituras. No <b>MuseScore.com</b> há arranjos para principiantes de quase tudo; abre a partitura e usa <i>Download → MIDI</i> (algumas exigem conta ou subscrição). Para clássicos sem direitos de autor há o <b>Mutopia Project</b> e o <b>IMSLP</b>, gratuitos. Muitos canais de tutoriais do YouTube vendem a partitura/MIDI do arranjo na descrição do vídeo.</li>
-      <li><b>Adicionar:</b> carrega em <b>📂 Adicionar música</b>, escolhe o ficheiro, confirma qual pista é a mão direita e qual é a esquerda, e guarda. No iPad o ficheiro pode vir da app Ficheiros (Transferências, iCloud Drive…).</li>
+      <li><b>Para aparecer no Mac e no iPad (recomendado):</b> abre <a href="https://github.com/${GH.owner}/${GH.repo}/upload/main/${GH.dir}" target="_blank">github.com/${GH.owner}/${GH.repo} → pasta musicas → Add file → Upload files</a>, arrasta os .mid e carrega em <i>Commit changes</i>. Funciona também no Safari do iPad. O nome do ficheiro é o nome da música.</li>
+      <li><b>Só neste aparelho:</b> carrega em <b>📂 Adicionar música</b>, escolhe o ficheiro, confirma qual pista é a mão direita e qual é a esquerda, e guarda. No iPad o ficheiro pode vir da app Ficheiros (Transferências, iCloud Drive…).</li>
       <li><b>Ou grava tu:</b> em <b>Tocar livre</b> carrega em Gravar, toca no piano, e depois “🎵 Praticar” transforma a gravação numa música com notas a cair.</li>
     </ol>
     <p class="note">As músicas importadas ficam guardadas neste browser (até 40). Uma versão “fácil/beginner” do arranjo é a melhor para começar.</p></div>
   <p class="fb" data-r="fb"></p>`;
   el.addEventListener('click', e => { const b = e.target.closest('button.song'); if (b) go('musicas', b.dataset.id); });
+  const ghBox = $('[data-r=gh]', el);
+  const showGh = force => loadCloudList(force).then(list => {
+    if (!document.body.contains(ghBox)) return;
+    ghBox.innerHTML = list.length ? list.map(f => { const r = S.songs[f.id]; return `<button class="song" data-id="${f.id}"><b>${esc(f.name)}</b><span class="by">Biblioteca (GitHub)</span><div class="meta"><span>☁️</span>${starsHtml(r ? r.stars : 0)}</div></button>`; }).join('')
+      : '<p class="note">Ainda não há músicas na pasta. Vê “Como adicionar músicas” em baixo.</p>';
+  }).catch(er => { ghBox.innerHTML = `<p class="note">Não consegui ler a biblioteca: ${esc(er.message)}.</p>`; });
+  showGh(false); $('[data-a=ghr]', el).onclick = () => { ghBox.innerHTML = '<p class="note">A carregar…</p>'; showGh(true); };
   const mg = $('[data-r=mg]', el);
   if (mg) {
     mg.addEventListener('change', e => { const i = e.target.dataset.ren; if (i != null && e.target.value.trim()) { S.imported[+i].title = e.target.value.trim(); save(); toast('Nome alterado.'); } });
