@@ -402,7 +402,7 @@ function majorFingering(ti) {
    PROGRESSO (guardado no browser)
    ========================================================= */
 const DEF = {
-  lessons: {}, songs: {}, xp: 0, days: {}, best: {}, ach: {}, imported: [], recs: [],
+  lessons: {}, songs: {}, lib: { order: [], hidden: [] }, xp: 0, days: {}, best: {}, ach: {}, imported: [], recs: [],
   stats: { ear: 0, read: 0, notes: 0, workouts: 0, midi: 0, chordId: 0 },
   settings: { labels: 'pt', range: '3', inst: 'piano', vol: 0.75, reverb: 0.18, midiSound: false, midiOut: true, goal: 10, split: false, splitPt: 60, leftInst: 'cordas', fallNames: true, micThresh: 0.012, kbOct: 4 }
 };
@@ -1622,6 +1622,26 @@ const SONGS = SONG_DEFS.map(buildSong);
 function importedSongs() { return S.imported.map(s => ({ id: s.id, title: s.title, by: s.by || 'Importada', lvl: 0, notes: s.n.map(([m, t, d, h]) => ({ m, t, d, h: h ? 'L' : 'R', v: 0.7 })), dur: s.dur, beat: s.beat || null, bpb: 4, imported: true })); }
 function findSong(id) { return SONGS.find(s => s.id === id) || importedSongs().find(s => s.id === id) || cloudParsed[id]; }
 /* ---------- Biblioteca partilhada: pasta "musicas" do repositório GitHub ---------- */
+const strHash = s => { let h = 5381; for (let i = 0; i < s.length; i++) h = ((h << 5) + h + s.charCodeAt(i)) >>> 0; return h.toString(36); };
+const ghToken = () => { try { return localStorage.getItem('ghToken') || ''; } catch (e) { return ''; } };
+function b64buf(buf) { const u = new Uint8Array(buf); let s = ''; for (let i = 0; i < u.length; i += 0x8000) s += String.fromCharCode.apply(null, u.subarray(i, i + 0x8000)); return btoa(s); }
+const b64utf8 = str => b64buf(new TextEncoder().encode(str));
+async function ghApi(method, path, body) {
+  const r = await fetch(`https://api.github.com/repos/${GH.owner}/${GH.repo}/contents/${path.split('/').map(encodeURIComponent).join('/')}`, { method, headers: { Accept: 'application/vnd.github+json', Authorization: 'Bearer ' + ghToken(), 'Content-Type': 'application/json' }, body: body ? JSON.stringify(body) : undefined });
+  if (!r.ok) { const t = await r.text(); throw new Error(r.status === 401 ? 'token inválido ou expirado' : r.status === 403 || r.status === 404 ? 'o token não tem permissão de escrita neste repositório' : r.status + ' ' + t.slice(0, 100)); }
+  return r.json();
+}
+async function saveLibRemote() {
+  if (!ghToken()) return false;
+  const res = await ghApi('PUT', GH.dir + '/ordem.json', { message: 'Ordem das músicas (app)', content: b64utf8(JSON.stringify(S.lib, null, 1)), sha: GH.orderSha || undefined, branch: 'main' });
+  GH.orderSha = res.content.sha; GH.wroteAt = Date.now(); return true;
+}
+function invalidateCloud() { cloudList = null; try { sessionStorage.removeItem('ghList'); } catch (e) { } }
+function applyLib(list) {
+  const ord = S.lib.order, hid = new Set(S.lib.hidden);
+  const idx = id => { const i = ord.indexOf(id); return i < 0 ? 1e6 : i; };
+  return list.map((x, i) => [x, i]).filter(([x]) => !hid.has(x.id)).sort((a, b) => idx(a[0].id) - idx(b[0].id) || a[1] - b[1]).map(([x]) => x);
+}
 const GH = (() => { const h = location.hostname; if (h.endsWith('.github.io')) return { owner: h.split('.')[0], repo: location.pathname.split('/')[1] || h }; return { owner: 'lucaslopeslacerda', repo: 'piano' }; })();
 GH.dir = 'musicas';
 let cloudList = null; const cloudParsed = {};
@@ -1632,18 +1652,20 @@ async function loadCloudList(force) {
   if (r.status === 404) return (cloudList = []);
   if (!r.ok) throw new Error(r.status === 403 ? 'limite de pedidos do GitHub atingido; tenta daqui a uns minutos' : 'erro ' + r.status);
   const j = await r.json();
-  cloudList = j.filter(f => f.type === 'file' && /\.midi?$/i.test(f.name)).map(f => ({ id: 'gh_' + f.sha.slice(0, 12), name: f.name.replace(/\.midi?$/i, '').replace(/[_]+/g, ' '), url: f.download_url }))
+  const ord = j.find(f => f.name === 'ordem.json'); GH.orderSha = ord ? ord.sha : null;
+  if (ord && !(GH.wroteAt && Date.now() - GH.wroteAt < 300000)) { try { const r2 = await fetch(`https://api.github.com/repos/${GH.owner}/${GH.repo}/contents/${GH.dir}/ordem.json?ref=main`, { headers: { Accept: 'application/vnd.github.raw' } }); if (r2.ok) { const o = await r2.json(); if (o && Array.isArray(o.order)) { S.lib = { order: o.order, hidden: o.hidden || [] }; save(); } } } catch (e) { } }
+  cloudList = j.filter(f => f.type === 'file' && /\.midi?$/i.test(f.name)).map(f => ({ id: 'gh_' + strHash(f.name), name: f.name.replace(/\.midi?$/i, '').replace(/[_]+/g, ' '), fname: f.name, path: f.path, sha: f.sha, url: f.download_url }))
     .sort((a, b) => a.name.localeCompare(b.name, 'pt'));
   try { sessionStorage.setItem('ghList', JSON.stringify({ t: Date.now(), l: cloudList })); } catch (e) { }
   return cloudList;
 }
 async function loadCloudSong(id) {
-  if (cloudParsed[id]) return cloudParsed[id];
   const list = await loadCloudList(); const f = list.find(x => x.id === id); if (!f) throw new Error('música não encontrada na pasta');
+  if (cloudParsed[id] && cloudParsed[id].sha === f.sha) return cloudParsed[id];
   const r = await fetch(f.url); if (!r.ok) throw new Error('erro ' + r.status);
   const m = parseMidi(await r.arrayBuffer());
   const notes = m.notes.filter(n => n.h).map(n => ({ m: n.m, t: n.t, d: n.d, h: n.h, v: n.v || .7 }));
-  return (cloudParsed[id] = { id, title: f.name, by: 'Biblioteca (GitHub)', lvl: 0, notes, dur: Math.max(...notes.map(n => n.t + n.d)), beat: m.beat, bpb: 4, imported: true });
+  return (cloudParsed[id] = { id, sha: f.sha, title: f.name, by: 'Biblioteca (GitHub)', lvl: 0, notes, dur: Math.max(...notes.map(n => n.t + n.d)), beat: m.beat, bpb: 4, imported: true });
 }
 function storeImported(title, notes, beat, by) {
   if (notes.length > 6000) { toast('Ficheiro muito grande para guardar; fica disponível só nesta sessão.'); }
@@ -1736,10 +1758,11 @@ function viewMusicas(el, arg) {
     if (arg.startsWith('gh_')) { el.innerHTML = '<p class="note">A carregar a música…</p>'; loadCloudSong(arg).then(() => go('musicas', arg)).catch(er => { el.innerHTML = `<p class="fb bad">Não consegui abrir a música: ${esc(er.message)}</p>`; }); return; }
   }
   const card = s => { const r = S.songs[s.id]; return `<button class="song" data-id="${s.id}"><b>${esc(s.title)}</b><span class="by">${esc(s.by)}${s.imported ? '' : ' · ' + (s.notes.some(n => n.h === 'L') ? 'duas mãos' : 'mão direita')}</span><div class="meta"><span class="lvl">${s.lvl ? [1, 2, 3].map(i => `<i class="${i <= s.lvl ? 'on' : ''}"></i>`).join('') : '📂 ' + Math.round(s.dur) + ' s'}</span>${starsHtml(r ? r.stars : 0)}</div></button>`; };
-  const imp = importedSongs();
-  el.innerHTML = `<div class="kicker">Músicas</div><h2>Toca músicas com as notas a cair</h2>
+  if (arg === 'gerir') return manageSongs(el);
+  const imp = applyLib(importedSongs());
+  el.innerHTML = `<div class="row sp" style="margin:0"><div class="kicker">Músicas</div><button class="btn ghost sm" data-a="manage">⚙️ Gerir músicas (ordem, ocultar, remover)</button></div><h2>Toca músicas com as notas a cair</h2>
   <p class="lead">Escolhe uma música. No leitor podes <b>ouvir</b>, praticar em modo <b>Esperar</b> (a música só avança quando tocas as teclas certas) ou <b>Ritmo</b> (pontuação a tempo), escolher a mão, mudar a velocidade e repetir um trecho em ciclo.</p>
-  <div class="songs">${SONGS.map(card).join('')}
+  <div class="songs">${applyLib(SONGS).map(card).join('')}
     <label class="song imp"><input type="file" accept=".mid,.midi,audio/midi,audio/x-midi" multiple hidden><b>📂 Adicionar música (ficheiro .mid)</b><span class="by">Podes escolher vários de uma vez</span></label></div>
   <div class="row sp" style="margin-top:24px"><h3 style="margin:0">📁 Biblioteca partilhada <span class="note">(pasta “musicas” no GitHub — aparece em todos os aparelhos)</span></h3><button class="btn ghost sm" data-a="ghr">↻ Atualizar</button></div>
   <div class="songs" data-r="gh" style="margin-top:10px"><p class="note">A carregar…</p></div>
@@ -1759,10 +1782,12 @@ function viewMusicas(el, arg) {
   const ghBox = $('[data-r=gh]', el);
   const showGh = force => loadCloudList(force).then(list => {
     if (!document.body.contains(ghBox)) return;
+    list = applyLib(list);
     ghBox.innerHTML = list.length ? list.map(f => { const r = S.songs[f.id]; return `<button class="song" data-id="${f.id}"><b>${esc(f.name)}</b><span class="by">Biblioteca (GitHub)</span><div class="meta"><span>☁️</span>${starsHtml(r ? r.stars : 0)}</div></button>`; }).join('')
       : '<p class="note">Ainda não há músicas na pasta. Vê “Como adicionar músicas” em baixo.</p>';
   }).catch(er => { ghBox.innerHTML = `<p class="note">Não consegui ler a biblioteca: ${esc(er.message)}.</p>`; });
   showGh(false); $('[data-a=ghr]', el).onclick = () => { ghBox.innerHTML = '<p class="note">A carregar…</p>'; showGh(true); };
+  $('[data-a=manage]', el).onclick = () => go('musicas', 'gerir');
   const mg = $('[data-r=mg]', el);
   if (mg) {
     mg.addEventListener('change', e => { const i = e.target.dataset.ren; if (i != null && e.target.value.trim()) { S.imported[+i].title = e.target.value.trim(); save(); toast('Nome alterado.'); } });
@@ -1782,6 +1807,86 @@ function viewMusicas(el, arg) {
   };
 }
 let pendingImport = null;
+function manageSongs(el) {
+  el.innerHTML = `<div class="kicker"><a href="#musicas" style="color:inherit">← Músicas</a></div><h2>Gerir músicas</h2>
+  <p class="lead">Muda a ordem com ↑ ↓, esconde as que não queres ver (👁) ou remove-as (🗑). As músicas da app só podem ser escondidas.</p>
+  <div class="card conn" data-r="tok"></div>
+  <div data-r="lists"><p class="note">A carregar…</p></div><div class="fb" data-r="fb"></div>`;
+  const fb = $('[data-r=fb]', el);
+  function tokCard() {
+    const has = !!ghToken();
+    $('[data-r=tok]', el).innerHTML = has
+      ? `<h3>✓ Ligado ao GitHub neste aparelho</h3><p class="note" style="margin-top:0">A ordem, as músicas escondidas e as remoções ficam gravadas no repositório e aparecem iguais no Mac e no iPad. Também podes enviar ficheiros .mid daqui.</p>
+         <div class="row"><label class="btn">⬆ Enviar .mid para a biblioteca<input type="file" accept=".mid,.midi,audio/midi" multiple hidden data-a="up"></label><button class="btn ghost sm" data-a="untok">Desligar este aparelho</button></div>`
+      : `<h3>Ligar ao GitHub (para remover e partilhar a ordem)</h3>
+         <p class="note" style="margin-top:0">Sem ligação, a ordem e as músicas escondidas ficam só neste aparelho, e não dá para apagar ficheiros do GitHub. Para ligar, cria uma chave de acesso que só serve para o repositório <b>piano</b>:</p>
+         <ol><li>Abre <a href="https://github.com/settings/personal-access-tokens/new" target="_blank">github.com/settings/personal-access-tokens/new</a>.</li>
+         <li>Nome: “Piano do Zero”. Validade: a que quiseres (por exemplo 1 ano).</li>
+         <li><b>Repository access → Only select repositories → piano</b>.</li>
+         <li><b>Permissions → Repository permissions → Contents → Read and write</b>.</li>
+         <li>Carrega em <b>Generate token</b>, copia o código (começa por <code>github_pat_</code>) e cola-o aqui:</li></ol>
+         <div class="row"><input data-a="tok" type="password" placeholder="github_pat_…" style="flex:1;min-width:220px;font:inherit;padding:8px 10px;border:1.5px solid var(--line);border-radius:8px"><button class="btn" data-a="savetok">Ligar</button></div>
+         <p class="note">A chave fica guardada só neste browser e só dá acesso ao repositório piano. Faz isto uma vez no Mac e uma vez no iPad.</p>`;
+    const st = $('[data-a=savetok]', el);
+    if (st) st.onclick = async () => {
+      const v = $('[data-a=tok]', el).value.trim(); if (!v) return;
+      try { localStorage.setItem('ghToken', v); } catch (e) { }
+      try {
+        const r = await fetch(`https://api.github.com/repos/${GH.owner}/${GH.repo}`, { headers: { Authorization: 'Bearer ' + v } });
+        const j = await r.json(); if (!r.ok || !j.permissions || !j.permissions.push) throw new Error(r.status === 401 ? 'chave inválida' : 'a chave não tem permissão de escrita no repositório piano');
+        setFb(fb, 'Ligado! Agora as alterações ficam no GitHub.', 'ok'); await saveLibRemote().catch(() => { }); tokCard();
+      } catch (er) { try { localStorage.removeItem('ghToken'); } catch (e) { } setFb(fb, 'Não deu: ' + esc(er.message) + '.', 'bad'); }
+    };
+    const un = $('[data-a=untok]', el); if (un) un.onclick = () => { try { localStorage.removeItem('ghToken'); } catch (e) { } tokCard(); };
+    const up = $('[data-a=up]', el);
+    if (up) up.onchange = async e => {
+      const files = [...e.target.files]; let ok = 0;
+      for (const f of files) {
+        try { const buf = await f.arrayBuffer(); parseMidi(buf); const ex = (cloudList || []).find(x => x.fname === f.name);
+          setFb(fb, `A enviar ${esc(f.name)}…`); await ghApi('PUT', GH.dir + '/' + f.name, { message: 'Adicionar ' + f.name + ' (app)', content: b64buf(buf), sha: ex ? ex.sha : undefined, branch: 'main' }); ok++; }
+        catch (er) { setFb(fb, `Falhou ${esc(f.name)}: ${esc(er.message)}`, 'bad'); }
+      }
+      if (ok) { setFb(fb, `${ok} música${ok > 1 ? 's' : ''} enviada${ok > 1 ? 's' : ''} para a biblioteca partilhada.`, 'ok'); invalidateCloud(); render(true); }
+    };
+  }
+  let gh = [];
+  function sec(title, items, kind) {
+    const ord = S.lib.order, hid = new Set(S.lib.hidden);
+    const idx = id => { const i = ord.indexOf(id); return i < 0 ? 1e6 : i; };
+    const sorted = items.map((x, i) => [x, i]).sort((a, b) => idx(a[0].id) - idx(b[0].id) || a[1] - b[1]).map(([x]) => x);
+    if (!sorted.length) return '';
+    return `<div class="card"><h3>${title}</h3><div class="reclist">${sorted.map((x, i) => `<div class="recitem" style="${hid.has(x.id) ? 'opacity:.45' : ''}">
+      <button class="btn ghost sm" data-mv="-1" data-id="${x.id}" data-k="${kind}" ${i === 0 ? 'disabled' : ''}>↑</button><button class="btn ghost sm" data-mv="1" data-id="${x.id}" data-k="${kind}" ${i === sorted.length - 1 ? 'disabled' : ''}>↓</button>
+      <span class="nm">${esc(x.title || x.name)}${hid.has(x.id) ? '<small>escondida</small>' : ''}</span>
+      <button class="btn ghost sm" data-hide="${x.id}">${hid.has(x.id) ? '👁 Mostrar' : '👁 Esconder'}</button>
+      ${kind === 'app' ? '' : `<button class="btn ghost sm" data-del="${x.id}" data-k="${kind}" ${kind === 'gh' && !ghToken() ? 'disabled title="Liga ao GitHub para remover"' : ''}>🗑 Remover</button>`}</div>`).join('')}</div></div>`;
+  }
+  async function render(force) {
+    try { gh = await loadCloudList(force); } catch (e) { gh = []; }
+    const L = $('[data-r=lists]', el); if (!L) return;
+    L.innerHTML = sec('📁 Biblioteca partilhada (GitHub)', gh.map(f => ({ id: f.id, name: f.name })), 'gh') + sec('Só neste aparelho', importedSongs().map(x => ({ id: x.id, title: x.title })), 'loc') + sec('Músicas da app', SONGS.map(x => ({ id: x.id, title: x.title })), 'app');
+  }
+  async function persist() { save(); try { if (await saveLibRemote()) setFb(fb, 'Guardado no GitHub.', 'ok'); else setFb(fb, 'Guardado neste aparelho.', 'ok'); } catch (er) { setFb(fb, 'Guardado neste aparelho, mas não no GitHub: ' + esc(er.message), 'bad'); } }
+  el.addEventListener('click', async e => {
+    const mv = e.target.closest('[data-mv]'), hd = e.target.closest('[data-hide]'), dl = e.target.closest('[data-del]');
+    if (mv) {
+      const kind = mv.dataset.k; const ids = [...$$(`[data-mv="1"][data-k="${kind}"], [data-mv="-1"][data-k="${kind}"]`, el)].map(b => b.dataset.id).filter((v, i, a) => a.indexOf(v) === i);
+      const i = ids.indexOf(mv.dataset.id), j = i + (+mv.dataset.mv); if (j < 0 || j >= ids.length) return;
+      [ids[i], ids[j]] = [ids[j], ids[i]];
+      S.lib.order = S.lib.order.filter(x => !ids.includes(x)).concat(ids); await render(); persist();
+    } else if (hd) {
+      const id = hd.dataset.hide, h = S.lib.hidden; S.lib.hidden = h.includes(id) ? h.filter(x => x !== id) : h.concat(id); await render(); persist();
+    } else if (dl) {
+      if (!dl.dataset.sure) { dl.dataset.sure = 1; dl.textContent = 'Confirmar?'; dl.style.color = 'var(--bad)'; return; }
+      const id = dl.dataset.del;
+      if (dl.dataset.k === 'loc') { S.imported = S.imported.filter(x => x.id !== id); delete S.songs[id]; save(); await render(); setFb(fb, 'Removida.', 'ok'); return; }
+      const f = gh.find(x => x.id === id); if (!f) return;
+      try { dl.textContent = 'A remover…'; await ghApi('DELETE', f.path, { message: 'Remover ' + f.fname + ' (app)', sha: f.sha, branch: 'main' }); delete S.songs[id]; invalidateCloud(); await render(true); setFb(fb, `“${esc(f.name)}” removida do GitHub.`, 'ok'); }
+      catch (er) { setFb(fb, 'Não consegui remover: ' + esc(er.message), 'bad'); dl.textContent = '🗑 Remover'; }
+    }
+  });
+  tokCard(); render(false);
+}
 function importDialog(el, r) {
   const parts = r.parts; let split = 60;
   const handOpts = pt => `<select data-k="${pt.k}">${parts.length === 1 ? `<option value="split" ${pt.hand === 'split' ? 'selected' : ''}>Dividir pelas duas mãos</option>` : ''}<option value="R" ${pt.hand === 'R' ? 'selected' : ''}>Mão direita</option><option value="L" ${pt.hand === 'L' ? 'selected' : ''}>Mão esquerda</option><option value="off">Ignorar</option></select>`;
@@ -2696,6 +2801,11 @@ function go(id, arg) {
   if (location.hash !== h) try { history.replaceState(null, '', h); } catch (e) { }
   updateDockH();
 }
+// links internos (#vista-arg) navegam sempre, mesmo dentro da mesma secção
+document.addEventListener('click', e => {
+  const a = e.target.closest('a[href^="#"]'); if (!a) return;
+  e.preventDefault(); const [id, ...rest] = a.getAttribute('href').slice(1).split('-'); if (id) go(id, rest.join('-') || undefined);
+});
 window.addEventListener('hashchange', () => { const [id, ...rest] = location.hash.slice(1).split('-'); const arg = rest.join('-') || undefined; if (id && (id !== curView || arg)) go(id, arg); });
 
 /* =========================================================
