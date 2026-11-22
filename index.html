@@ -1255,19 +1255,19 @@ window.addEventListener('resize', () => { resizeFall(); updateDockH(); });
 function fallLoop(ts) {
   if (!Fall.mode) return;
   const dt = Math.min(0.1, (ts - Fall.last) / 1000); Fall.last = ts;
-  if (Fall.onFrame) Fall.onFrame(dt);
+  Fall.raf = requestAnimationFrame(fallLoop); // agendar já: um erro de desenho nunca pára a música
+  try { if (Fall.onFrame) Fall.onFrame(dt); } catch (e) { console.error(e); }
+  try { if (Sheet.on && Fall.drawSheet) Fall.drawSheet(); } catch (e) { console.error(e); }
   const g = Fall.g, W = Fall.W, H = Fall.H;
+  if (W < 4 || H < 4) return;
   g.setTransform(Fall.dpr, 0, 0, Fall.dpr, 0, 0);
   g.fillStyle = '#191613'; g.fillRect(0, 0, W, H);
   // linhas das oitavas
   g.strokeStyle = 'rgba(255,255,255,.07)'; g.lineWidth = 1;
   for (let m = LOW; m <= HIGH; m++) if (pcOf(m) === 0 && KL[m]) { const x = Math.round(KL[m].x * W) + .5; g.beginPath(); g.moveTo(x, 0); g.lineTo(x, H); g.stroke(); }
-  if (Fall.draw) Fall.draw(g, W, H);
-  else if (Fall.mode === 'free') drawFree(g, W, H);
-  if (Sheet.on && Fall.drawSheet) Fall.drawSheet();
-  Fall.raf = requestAnimationFrame(fallLoop);
+  try { if (Fall.draw) Fall.draw(g, W, H); else if (Fall.mode === 'free') drawFree(g, W, H); } catch (e) { console.error(e); }
 }
-function rrect(g, x, y, w, h, r) { r = Math.min(r, w / 2, h / 2); g.beginPath(); g.moveTo(x + r, y); g.arcTo(x + w, y, x + w, y + h, r); g.arcTo(x + w, y + h, x, y + h, r); g.arcTo(x, y + h, x, y, r); g.arcTo(x, y, x + w, y, r); g.closePath(); }
+function rrect(g, x, y, w, h, r) { if (!(w > 0 && h > 0)) { g.beginPath(); return; } r = Math.max(0, Math.min(r, w / 2, h / 2)); g.beginPath(); g.moveTo(x + r, y); g.arcTo(x + w, y, x + w, y + h, r); g.arcTo(x + w, y + h, x, y + h, r); g.arcTo(x, y + h, x, y, r); g.arcTo(x, y, x + w, y, r); g.closePath(); }
 const freeOn = (m, v) => { if (Fall.mode === 'free') Fall.free.push({ m, t0: performance.now() / 1000, t1: null, v }); };
 const freeOff = m => { if (Fall.mode !== 'free') return; for (let i = Fall.free.length - 1; i >= 0; i--) if (Fall.free[i].m === m && Fall.free[i].t1 == null) { Fall.free[i].t1 = performance.now() / 1000; break; } };
 onL.add(freeOn); offL.add(freeOff);
