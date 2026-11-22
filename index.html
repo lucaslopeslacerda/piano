@@ -399,7 +399,7 @@ function majorFingering(ti) {
 const DEF = {
   lessons: {}, songs: {}, xp: 0, days: {}, best: {}, ach: {}, imported: [], recs: [],
   stats: { ear: 0, read: 0, notes: 0, workouts: 0, midi: 0, chordId: 0 },
-  settings: { labels: 'pt', range: '3', inst: 'piano', vol: 0.75, reverb: 0.18, midiSound: false, goal: 10, split: false, splitPt: 60, leftInst: 'cordas', fallNames: true, micThresh: 0.012, kbOct: 4 }
+  settings: { labels: 'pt', range: '3', inst: 'piano', vol: 0.75, reverb: 0.18, midiSound: false, midiOut: true, goal: 10, split: false, splitPt: 60, leftInst: 'cordas', fallNames: true, micThresh: 0.012, kbOct: 4 }
 };
 function merge(a, b) { const o = Array.isArray(a) ? (Array.isArray(b) ? b : a) : { ...a }; if (Array.isArray(a)) return o; for (const k in b) { o[k] = (a[k] && typeof a[k] === 'object' && !Array.isArray(a[k]) && b[k] && typeof b[k] === 'object') ? merge(a[k], b[k]) : b[k]; } return o; }
 let S;
@@ -429,7 +429,17 @@ function addXP(n) {
    SOM
    ========================================================= */
 const AE = { ctx: null, master: null, bus: null, wet: null };
+function unlockIOSAudio() {
+  try { if (navigator.audioSession) navigator.audioSession.type = 'playback'; } catch (e) { }
+  if (AE.silent) return;
+  try { // truque: um <audio> silencioso põe o iPad em modo “reprodução”, que ignora o interruptor de silêncio
+    const a = document.createElement('audio'); a.setAttribute('playsinline', ''); a.loop = true;
+    a.src = 'data:audio/wav;base64,UklGRiQAAABXQVZFZm10IBAAAAABAAEAQB8AAIA+AAACABAAZGF0YQAAAAA=';
+    const pr = a.play(); if (pr && pr.catch) pr.catch(() => { }); AE.silent = a;
+  } catch (e) { }
+}
 function ac() {
+  unlockIOSAudio();
   if (!AE.ctx) {
     const C = window.AudioContext || window.webkitAudioContext;
     const c = AE.ctx = new C({ latencyHint: 'interactive' });
@@ -553,7 +563,15 @@ function lightKey(m, whenSec, durSec, cls = 'f-play') {
   later(() => { const k = keyEls[m]; if (k) k.classList.add(cls); }, whenSec * 1000);
   later(() => { const k = keyEls[m]; if (k) k.classList.remove(cls); }, (whenSec + Math.max(0.12, durSec * 0.92)) * 1000);
 }
+let midiOuts = [];
+const useMidiOut = () => S.settings.midiOut && midiOuts.length > 0;
+function midiOutNote(m, dur, v, when) {
+  const t0 = performance.now() + when * 1000, vel = clamp(Math.round(v * 127), 1, 127);
+  midiOuts.forEach(o => { try { o.send([0x90, m, vel], t0); o.send([0x80, m, 0], t0 + dur * 1000); } catch (e) { } });
+}
+function midiOutSilence() { midiOuts.forEach(o => { try { if (o.clear) o.clear(); o.send([0xB0, 123, 0]); o.send([0xB0, 64, 0]); } catch (e) { } }); }
 function playNote(m, dur, v = 0.75, when = 0, opts = {}) {
+  if (useMidiOut() && !opts.inst) { midiOutNote(m, dur, v, when); if (!opts.noLight) lightKey(m, when, dur, opts.cls); ac(); return { stop() { } }; }
   const c = ac(); const t = c.currentTime + when;
   const vo = startVoice(m, v, t, opts.inst); vo.stop(t + dur); sched.push(vo);
   if (!opts.noLight) lightKey(m, when, dur, opts.cls);
@@ -562,7 +580,7 @@ function playNote(m, dur, v = 0.75, when = 0, opts = {}) {
 function clearTimers() {
   timers.forEach(clearTimeout); timers = [];
   if (AE.ctx) { const now = AE.ctx.currentTime; sched.forEach(v => v.stop(now)); }
-  sched = [];
+  sched = []; if (midiOuts.length) midiOutSilence();
   $$('.key.f-play,.key.f-playL').forEach(k => k.classList.remove('f-play', 'f-playL'));
 }
 function playSeq(steps, bpm = 100, opts = {}) {
@@ -739,6 +757,7 @@ async function connectMIDI() {
 function bindMIDI() {
   midiNames = [];
   midiAccess.inputs.forEach(inp => { inp.onmidimessage = onMidi; midiNames.push(inp.name); });
+  midiOuts = [...midiAccess.outputs.values()];
   const was = document.body.classList.contains('midi-on');
   document.body.classList.toggle('midi-on', midiNames.length > 0);
   if (midiNames.length && !was) toast('🎹 Piano ligado: ' + midiNames[0]);
@@ -1803,7 +1822,7 @@ function songPlayer(el, song) {
   </div>
   <div class="prog" data-a="seek"><i></i><div class="loop" style="display:none"></div></div>
   <div class="scorebar"><span>Certas <b data-r="hits">0</b></span><span>Erradas <b data-r="errs">0</b></span><span>Falhadas <b data-r="miss">0</b></span><span data-r="status" class="note" style="margin:0"></span></div>
-  <p class="note">Atalhos: <kbd>Espaço</kbd> tocar/pausa. Azul = mão direita, laranja = mão esquerda. No modo Esperar a música só avança quando tocas as teclas marcadas. Usa um teclado MIDI ou o microfone (em Definições) para tocares num piano real.</p>`;
+  <p class="note"><b>Ouvir</b> = a app toca a música inteira (pelo teu piano, se estiver ligado por cabo; senão pelo altifalante). <b>Esperar</b> = a música só avança quando tocas as teclas certas. <b>Ritmo</b> = a música não para e és pontuado pelo tempo. Sem som no iPad? Sobe o volume e confirma que o piano está ligado. Atalhos: <kbd>Espaço</kbd> tocar/pausa. Azul = mão direita, laranja = mão esquerda. No modo Esperar a música só avança quando tocas as teclas marcadas. Usa um teclado MIDI ou o microfone (em Definições) para tocares num piano real.</p>`;
   const R = k => $(`[data-r=${k}]`, el);
   function segSet(g, v) { $$(`[data-g=${g}] button`, el).forEach(b => b.classList.toggle('on', b.dataset.v === v)); }
   segSet('mode', P.mode); segSet('hands', P.hands);
@@ -1816,6 +1835,7 @@ function songPlayer(el, song) {
   function resetScore() { P.hits = P.errs = P.misses = P.perfect = 0; updScore(); }
   function updScore() { R('hits').textContent = P.hits; R('errs').textContent = P.errs; R('miss').textContent = P.misses; }
   function setPlaying(on) {
+    if (!on) { if (midiOuts.length) midiOutSilence(); }
     P.playing = on; $('[data-a=play]', el).textContent = on ? '⏸ Pausa' : '▶ Tocar';
     R('status').textContent = '';
   }
@@ -2249,6 +2269,7 @@ function viewDefinicoes(el) {
   <div class="card"><h3>Ligar um piano real</h3>
     <div class="set">
       <span class="k">Teclado MIDI (USB ou Bluetooth)</span><span><button class="btn" data-a="midi">🔌 Ligar teclado MIDI</button> <span class="note" data-r="midi">${midiNames.length ? 'Ligado: ' + esc(midiNames.join(', ')) : 'Usa o Chrome ou o Edge e liga o teclado antes de carregar.'}</span></span>
+      <span class="k">Músicas pelo piano</span><label class="tg"><input type="checkbox" data-a="mo" ${st.midiOut ? 'checked' : ''}> Tocar as músicas (modo Ouvir e a “outra mão”) pelo próprio piano, através do cabo</label>
       <span class="k">Som da app com MIDI</span><label class="tg"><input type="checkbox" data-a="ms" ${st.midiSound ? 'checked' : ''}> Tocar o som desta app quando uso o teclado MIDI (desliga se o teu piano já tem som)</label>
       <span class="k">Microfone (piano acústico)</span><span><button class="btn" data-a="mic">${Mic.on ? '■ Desligar microfone' : '🎤 Ativar microfone'}</button> <span class="meter"><i data-r="lvl"></i></span> <b data-r="det"></b></span>
       <span class="k">Sensibilidade</span><span><input type="range" min="0.004" max="0.05" step="0.002" value="${st.micThresh}" data-a="th"> <span class="note">mais à esquerda = apanha sons mais baixos</span></span>
@@ -2273,6 +2294,7 @@ function viewDefinicoes(el) {
   A('midi').onclick = async () => { const err = await connectMIDI(); R('midi').textContent = err || (midiNames.length ? 'Ligado: ' + midiNames.join(', ') : 'Permissão dada, mas não encontrei nenhum teclado. Liga-o por USB/Bluetooth.'); };
   cur.onDevices = () => { R('midi').textContent = midiNames.length ? 'Ligado: ' + midiNames.join(', ') : 'Nenhum teclado ligado.'; };
   A('ms').onchange = e => { st.midiSound = e.target.checked; save(); };
+  A('mo').onchange = e => { st.midiOut = e.target.checked; save(); if (!st.midiOut) midiOutSilence(); };
   A('mic').onclick = async () => { if (Mic.on) { Mic.stop(); A('mic').textContent = '🎤 Ativar microfone'; return; } const err = await Mic.start(); if (err) { R('det').textContent = err; return; } A('mic').textContent = '■ Desligar microfone'; };
   A('th').oninput = e => { st.micThresh = +e.target.value; save(); };
   const mon = (m, v, src) => { const x = R('mon'); if (x) x.textContent = `${fullName(m)} · força ${Math.round(v * 127)} · ${src === 'midi' ? 'pelo cabo ✓' : src === 'mic' ? 'pelo microfone' : 'no ecrã'}`; };
